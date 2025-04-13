@@ -1,0 +1,10 @@
+flask
+faiss-cpu
+numpy
+google-generativeai
+langchain
+langchain-community
+langchain_google_genai
+langchain_google_vertexai
+sentence-transformers
+dotenv
