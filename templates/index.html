@@ -103,9 +103,6 @@
         });
         const data = await res.json();
         let botReply = data.answer;
-        if (data.sources && data.sources.length > 0) {
-          botReply += "\n\n【参照されたDB】: " + data.sources.join(", ");
-        }
         appendMessage('bot', botReply);
       } catch (error) {
         appendMessage('bot', "エラーが発生しました: " + error.message);
