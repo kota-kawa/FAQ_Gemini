@@ -23,10 +23,5 @@
 Thumbs.db
 .vscode/
 
-
-
-
-
-# ビルドディレクトリを無視
-/build/
-__pycache__/
+# 仮想環境ディレクトリを無視
+venv/
