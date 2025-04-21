@@ -12,7 +12,7 @@ load_dotenv()
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "default_secret_key")
 
-os.environ["GOOGLE_API_KEY"] = os.getenv("GOOGLE_API_KEY")
+#os.environ["GOOGLE_API_KEY"] = os.getenv("GOOGLE_API_KEY")
 
 
 # ログレベル設定（デバッグ時はDEBUGにしておくと詳細が出ます）
@@ -76,7 +76,12 @@ def load_all_indices():
     return indices, index_summaries
 
 def create_composable_graph():
+    #indices, index_summaries = load_all_indices()
     indices, index_summaries = load_all_indices()
+    # ── ここで「上位5件」のみを抽出 ──
+    indices = indices[:7]
+    index_summaries = index_summaries[:7]
+
     if len(indices) == 1:
         return indices[0]
     # グローバル設定済みのため、追加の引数は不要
