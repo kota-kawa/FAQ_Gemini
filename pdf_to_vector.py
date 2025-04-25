@@ -14,7 +14,7 @@ from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from langchain_google_genai import GoogleGenerativeAI
 
 # PDFファイルが配置されるディレクトリと、インデックスの永続化先ディレクトリ
-PDF_DIR = "./static/pdf"
+PDF_DIR = "./static/sample_FAQ_PDF"
 INDEX_DB_DIR = "./static/vector_db_llamaindex"
 os.makedirs(INDEX_DB_DIR, exist_ok=True)
 
