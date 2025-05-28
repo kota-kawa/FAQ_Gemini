@@ -1,143 +1,257 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
-  <meta charset="UTF-8">
+  <meta charset="UTF-8" />
   <title>Q&A Chat System</title>
   <style>
-    body {
-      font-family: Arial, sans-serif;
-      margin: 0;
-      padding: 0;
-      background-color: #f2f2f2;
+    :root {
+      --primary: #4f9aff;
+      --primary-dark: #3a7dd4;
+      --bg: #f0f4fb;
+      --card-bg: #ffffff;
+      --user-msg: #cee4ff;
+      --bot-msg: #e5e5ea;
+      --radius: 12px;
+      --transition: 0.3s ease;
     }
+    * {
+      box-sizing: border-box;
+      margin: 0; padding: 0;
+      font-family: "Helvetica Neue", Arial, sans-serif;
+    }
+    body {
+      background: var(--bg);
+      display: flex; justify-content: center; align-items: center;
+      min-height: 100vh; padding: 20px;
+    }
+
+    /* ===== コンテナ ===== */
     .container {
       width: 100%;
-      max-width: 800px;
-      margin: 0 auto;
-      padding: 20px;
-    }
-    .chat-box {
-      background-color: #fff;
-      border-radius: 10px;
-      padding: 20px;
-      height: 500px;
-      overflow-y: auto;
-      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-    }
-    .message {
-      margin: 10px 0;
+      max-width: 480px;
+      max-height: 80vh;            /* 画面高さの80%を上限に */
       display: flex;
+      flex-direction: column;
+      background: var(--card-bg);
+      border-radius: var(--radius);
+      box-shadow: 0 8px 24px rgba(0,0,0,0.1);
+      overflow: hidden;            /* はみ出し部分を隠す */
+    }
+    .header {
+      background: var(--primary);
+      color: #fff;
+      padding: 16px;
+      text-align: center;
+      font-size: 1.2rem;
+      position: relative;
+    }
+    .header .reset-btn {
+      position: absolute; right: 16px; top: 50%;
+      transform: translateY(-50%);
+      background: none; border: none;
+      color: #fff; cursor: pointer; font-size: 1.2rem;
+      transition: transform var(--transition);
+    }
+    .header .reset-btn:hover {
+      transform: translateY(-50%) rotate(90deg);
+    }
+
+    /* ===== チャット領域 ===== */
+    .chat-box {
+      flex: 1;
+      max-height: 60vh;            /* 画面高さの60%を上限に */
+      padding: 16px;
+      overflow-y: auto;
+      background: #fafcff;
+      scrollbar-width: thin;
+      scrollbar-color: rgba(0,0,0,0.2) transparent;
+    }
+    .chat-box::-webkit-scrollbar { width: 6px; }
+    .chat-box::-webkit-scrollbar-thumb {
+      background: rgba(0,0,0,0.2);
+      border-radius: 3px;
+    }
+
+    /* ===== メッセージ ===== */
+    .message {
+      display: flex; margin: 8px 0; opacity: 0;
     }
     .message.user {
       justify-content: flex-end;
+      animation: slideInRight 0.4s forwards;
     }
     .message.bot {
       justify-content: flex-start;
+      animation: slideInLeft 0.4s forwards;
     }
-    .message .text {
-      padding: 10px 15px;
-      border-radius: 10px;
+    .text {
+      position: relative;           /* スピナー配置用 */
       max-width: 70%;
-      white-space: pre-wrap;
+      padding: 12px 16px;
+      border-radius: var(--radius);
+      line-height: 1.4;
+      transition: background var(--transition);
     }
-    .message.user .text {
-      background-color: #0084ff;
-      color: white;
+    .message.user .text { background: var(--user-msg); }
+    .message.bot  .text { background: var(--bot-msg);  }
+
+    @keyframes slideInLeft {
+      from { transform: translateX(-30px); opacity: 0; }
+      to   { transform: translateX(0);     opacity: 1; }
     }
-    .message.bot .text {
-      background-color: #e5e5ea;
-      color: black;
+    @keyframes slideInRight {
+      from { transform: translateX(30px);  opacity: 0; }
+      to   { transform: translateX(0);     opacity: 1; }
     }
-    input[type="text"] {
-      width: calc(100% - 90px);
-      padding: 10px;
-      border: 1px solid #ccc;
-      border-radius: 5px;
-      margin-right: 10px;
+
+    /* ===== 入力エリア ===== */
+    .input-area {
+      display: flex;
+      padding: 12px;
+      background: #fff;
+      border-top: 1px solid #eee;
     }
-    button {
-      padding: 10px 20px;
+    .input-area input {
+      flex: 1;
+      padding: 12px;
+      border: 1px solid #ddd;
+      border-radius: var(--radius) 0 0 var(--radius);
+      transition: border-color var(--transition);
+    }
+    .input-area input:focus {
+      border-color: var(--primary);
+      outline: none;
+    }
+    .input-area button {
+      width: 60px;
       border: none;
-      background-color: #0084ff;
-      color: white;
-      border-radius: 5px;
+      background: var(--primary);
+      color: #fff;
+      border-radius: 0 var(--radius) var(--radius) 0;
       cursor: pointer;
+      display: flex; justify-content: center; align-items: center;
+      transition: background var(--transition), transform var(--transition);
     }
-    button:hover {
-      background-color: #006bbf;
+    .input-area button svg {
+      width: 20px; height: 20px;
+      transform: rotate(0deg);
+      transition: transform var(--transition);
     }
-    /* リセットボタンのスタイル（任意で調整） */
-    #reset-btn {
-      background-color: #ff4d4d;
-      margin-top: 10px;
+    .input-area button:active {
+      background: var(--primary-dark);
     }
-    #reset-btn:hover {
-      background-color: #e60000;
+    .input-area button:active svg {
+      transform: rotate(45deg);
+    }
+
+    /* ===== スピナー (チャット内) ===== */
+    .spinner-wrapper {
+      position: absolute;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+    }
+    .spinner {
+      box-sizing: border-box;
+      width: 20px; height: 20px;
+      border: 3px solid rgba(0,0,0,0.1);
+      border-top-color: var(--primary);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin {
+      from { transform: rotate(0deg); }
+      to   { transform: rotate(360deg); }
     }
   </style>
 </head>
 <body>
   <div class="container">
-    <h2>Q&A Chat System（質問が変わるごとに、リセットしてください）</h2>
+    <div class="header">
+      Q&A Chat System
+      <button class="reset-btn" title="リセット">&#x21bb;</button>
+    </div>
     <div id="chat" class="chat-box"></div>
-    <form id="chat-form">
-      <input type="text" id="question" placeholder="質問を入力してください" required />
-      <button type="submit">送信</button>
+    <form id="chat-form" class="input-area">
+      <input type="text" id="question" placeholder="質問を入力してください…" autocomplete="off" required />
+      <button type="submit" title="送信">
+        <svg viewBox="0 0 24 24" fill="currentColor">
+          <path d="M2 21l21-9L2 3v7l15 2-15 2v7z"/>
+        </svg>
+      </button>
     </form>
-    <!-- 会話履歴リセット用ボタン -->
-    <button id="reset-btn">会話履歴リセット</button>
   </div>
+
   <script>
-    document.getElementById('chat-form').addEventListener('submit', async function(e) {
+    const chatBox = document.getElementById('chat');
+    const form    = document.getElementById('chat-form');
+    const input   = document.getElementById('question');
+    const resetBtn= document.querySelector('.reset-btn');
+
+    form.addEventListener('submit', async e => {
       e.preventDefault();
-      const input = document.getElementById('question');
-      const question = input.value.trim();
-      if (!question) return;
-      appendMessage('user', question);
+      const q = input.value.trim();
+      if (!q) return;
+      appendMessage('user', q);
       input.value = '';
+      // スピナー付きの空メッセージを追加
+      const placeholder = appendSpinnerMessage();
       try {
         const res = await fetch('/rag_answer', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ question: question })
+          body: JSON.stringify({ question: q })
         });
-        const data = await res.json();
-        let botReply = data.answer;
-        appendMessage('bot', botReply);
-      } catch (error) {
-        appendMessage('bot', "エラーが発生しました: " + error.message);
+        const { answer } = await res.json();
+        replaceSpinnerMessage(placeholder, answer);
+      } catch (err) {
+        replaceSpinnerMessage(placeholder, 'エラー: ' + err.message);
       }
     });
 
-    // 会話履歴リセットボタンの処理
-    document.getElementById('reset-btn').addEventListener('click', async function() {
+    resetBtn.addEventListener('click', async () => {
+      if (!confirm('会話履歴をリセットしますか？')) return;
       try {
-        const res = await fetch('/reset_history', {
-          method: 'POST'
-        });
-        const data = await res.json();
-        if (data.status) {
-          // チャット画面をクリア
-          document.getElementById('chat').innerHTML = "";
-          alert("会話履歴がリセットされました。新しい分野の質問を行ってください。");
-        } else {
-          alert("会話履歴リセット中にエラーが発生しました。");
-        }
-      } catch (error) {
-        alert("会話履歴リセット中にエラーが発生しました: " + error.message);
+        const res = await fetch('/reset_history', { method: 'POST' });
+        const { status } = await res.json();
+        if (status) chatBox.innerHTML = '';
+        else alert('リセットに失敗しました。');
+      } catch (err) {
+        alert('リセット中にエラー: ' + err.message);
       }
     });
 
     function appendMessage(sender, text) {
-      const chatBox = document.getElementById('chat');
-      const div = document.createElement('div');
-      div.className = 'message ' + sender;
-      const span = document.createElement('div');
-      span.className = 'text';
-      span.textContent = text;
-      div.appendChild(span);
-      chatBox.appendChild(div);
+      const m = document.createElement('div');
+      m.className = 'message ' + sender;
+      const t = document.createElement('div');
+      t.className = 'text';
+      t.textContent = text;
+      m.appendChild(t);
+      chatBox.appendChild(m);
       chatBox.scrollTop = chatBox.scrollHeight;
+    }
+
+    function appendSpinnerMessage() {
+      const m = document.createElement('div');
+      m.className = 'message bot';
+      const t = document.createElement('div');
+      t.className = 'text';
+      t.style.minHeight = '24px';  // 高さを確保
+      const wrapper = document.createElement('div');
+      wrapper.className = 'spinner-wrapper';
+      const spinner = document.createElement('div');
+      spinner.className = 'spinner';
+      wrapper.appendChild(spinner);
+      t.appendChild(wrapper);
+      m.appendChild(t);
+      chatBox.appendChild(m);
+      chatBox.scrollTop = chatBox.scrollHeight;
+      return m;
+    }
+
+    function replaceSpinnerMessage(msgElem, text) {
+      const t = msgElem.querySelector('.text');
+      t.innerHTML = text;
     }
   </script>
 </body>
