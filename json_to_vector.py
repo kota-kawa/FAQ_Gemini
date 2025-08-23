@@ -1,9 +1,7 @@
 import os
 import glob
+import json
 from dotenv import load_dotenv
-
-# Word ドキュメント読み込み用
-from docx import Document as DocxDocument
 
 # LlamaIndex の主要モジュール
 from llama_index.core import Document, Settings, PromptHelper
@@ -15,9 +13,10 @@ from langchain_google_genai import GoogleGenerativeAI
 # .env ファイルから環境変数を読み込み（必要なら）
 load_dotenv()
 
-# Word ファイルが配置されるディレクトリと、インデックスの永続化先ディレクトリ
-WORD_DIR = "./static/sample_FAQ_docx"
-INDEX_DB_DIR = "./vdb2/vector_db_docx"
+# JSON ファイルが配置されるディレクトリと、インデックスの永続化先ディレクトリ
+JSON_DIR = "./static/sample_FAQ_json"
+INDEX_DB_DIR = "./vdb2/vector_db_json"
+
 os.makedirs(INDEX_DB_DIR, exist_ok=True)
 
 # テキスト分割用パラメータ
@@ -28,41 +27,57 @@ def split_text(text: str, chunk_size: int = CHUNK_SIZE, chunk_overlap: int = CHU
     """与えられたテキストを固定長チャンクに分割するシンプルな実装"""
     chunks = []
     start = 0
-    text_length = len(text)
-    while start < text_length:
-        end = min(text_length, start + chunk_size)
+    length = len(text)
+    while start < length:
+        end = min(length, start + chunk_size)
         chunks.append(text[start:end])
-        if end == text_length:
+        if end == length:
             break
         start = end - chunk_overlap
     return chunks
 
-def process_docx(docx_path: str) -> list[Document]:
+
+def process_json(json_path: str) -> list[Document]:
     """
-    .docx を読み込み、段落ごとにテキストをチャンクに分割して
+    JSON ファイルを読み込み、エントリごとにテキストをチャンクに分割して
     Document オブジェクトのリストを生成する。
-    各 Document には、元ファイル名と段落番号がメタデータとして付与される。
+    JSON はリストまたはオブジェクト形式で、'question'/'answer' ペアまたは 'text' キーを想定。
+    各 Document には、元ファイル名とエントリ番号がメタデータとして付与される。
     """
-    documents = []
+    documents: list[Document] = []
     try:
-        doc = DocxDocument(docx_path)
-        for para_idx, para in enumerate(doc.paragraphs):
-            text = para.text.strip()
-            if not text:
+        with open(json_path, encoding='utf-8') as f:
+            data = json.load(f)
+
+        base_meta = {'source': os.path.basename(json_path)}
+        entries = data if isinstance(data, list) else [data]
+
+        for idx, entry in enumerate(entries):
+            if not isinstance(entry, dict):
                 continue
-            metadata = {
-                "source": os.path.basename(docx_path),
-                "paragraph": para_idx + 1
-            }
+
+            # 質問応答形式の場合
+            if 'question' in entry and 'answer' in entry:
+                text = f"Q: {entry['question']}\nA: {entry['answer']}"
+            # テキストフィールドがある場合
+            elif 'text' in entry:
+                text = entry['text']
+            else:
+                continue
+
+            metadata = base_meta.copy()
+            metadata['entry'] = idx + 1
+
             for chunk in split_text(text):
                 documents.append(Document(text=chunk, extra_info=metadata))
+
         return documents
     except Exception as e:
-        print(f"Error processing {docx_path}: {e}")
+        print(f"Error processing {json_path}: {e}")
         return []
 
 # LLM のインスタンスを生成し、Settings に設定
-llm = GoogleGenerativeAI(model="gemini-2.0-flash")
+llm = GoogleGenerativeAI(model='gemini-2.0-flash')
 Settings.llm = llm
 
 # PromptHelper の初期化（max_tokens, chunk_size, chunk_overlap_ratio）
@@ -77,25 +92,25 @@ Settings.embed_model = embed_model
 
 def create_vector_indices():
     """
-    Word (.docx) ファイルごとにベクトルインデックスを生成し、ディスクに永続化する関数
+    JSON ファイルごとにベクトルインデックスを生成し、ディスクに永続化する関数
     """
-    word_files = glob.glob(os.path.join(WORD_DIR, "*.docx"))
-    if not word_files:
-        raise FileNotFoundError(f"No Word files found in {WORD_DIR}")
-    
+    json_files = glob.glob(os.path.join(JSON_DIR, '*.json'))
+    if not json_files:
+        raise FileNotFoundError(f"No JSON files found in {JSON_DIR}")
+
     try:
         from llama_index import VectorStoreIndex
     except ImportError:
         from llama_index.core.indices.vector_store.base import VectorStoreIndex
 
-    for word_file in word_files:
-        name = os.path.splitext(os.path.basename(word_file))[0]
+    for json_file in json_files:
+        name = os.path.splitext(os.path.basename(json_file))[0]
         subdir = os.path.join(INDEX_DB_DIR, name)
         os.makedirs(subdir, exist_ok=True)
 
-        docs = process_docx(word_file)
+        docs = process_json(json_file)
         if not docs:
-            print(f"No valid text in {word_file}. Skipping...")
+            print(f"No valid entries in {json_file}. Skipping...")
             continue
 
         index = VectorStoreIndex.from_documents(
@@ -105,10 +120,10 @@ def create_vector_indices():
             embed_model=embed_model
         )
 
-        persist_dir = os.path.join(subdir, "persist")
+        persist_dir = os.path.join(subdir, 'persist')
         os.makedirs(persist_dir, exist_ok=True)
         index.storage_context.persist(persist_dir)
         print(f"Index saved for {name} to {persist_dir}")
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     create_vector_indices()

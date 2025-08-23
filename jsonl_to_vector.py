@@ -15,7 +15,7 @@ load_dotenv()
 
 # JSONL ファイルが配置されるディレクトリと、インデックスの永続化先ディレクトリ
 JSONL_DIR = "./static/sample_FAQ_jsonl"
-INDEX_DB_DIR = "./static/vector_db_llamaindex"
+INDEX_DB_DIR = "./vdb2/vector_db_jsonl"
 os.makedirs(INDEX_DB_DIR, exist_ok=True)
 
 # テキスト分割用パラメータ
@@ -77,6 +77,9 @@ prompt_helper = PromptHelper(4096, CHUNK_SIZE, CHUNK_OVERLAP / CHUNK_SIZE)
 
 # 埋め込みモデルを設定
 embed_model = HuggingFaceEmbedding(model_name='intfloat/multilingual-e5-large')
+#embed_model = HuggingFaceEmbedding(model_name='sentence-transformers/all-mpnet-base-v2')
+#embed_model = HuggingFaceEmbedding(model_name='sentence-transformers/stsb-xlm-r-multilingual')
+
 Settings.embed_model = embed_model
 
 def create_vector_indices():

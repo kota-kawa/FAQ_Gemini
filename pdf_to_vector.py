@@ -14,8 +14,8 @@ from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from langchain_google_genai import GoogleGenerativeAI
 
 # PDFファイルが配置されるディレクトリと、インデックスの永続化先ディレクトリ
-PDF_DIR = "./static/sample_FAQ_PDF"
-INDEX_DB_DIR = "./static/vector_db_llamaindex"
+PDF_DIR = "./static/sample_FAQ_pdf"
+INDEX_DB_DIR = "./vdb2/vector_db_pdf"
 os.makedirs(INDEX_DB_DIR, exist_ok=True)
 
 # テキスト分割用パラメータ
@@ -64,7 +64,10 @@ prompt_helper = PromptHelper(4096, CHUNK_SIZE, CHUNK_OVERLAP / CHUNK_SIZE)
 
 # 埋め込みモデルは、ここでは HuggingFaceEmbedding を使用（OPENAI_API_KEY は不要）
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
-embed_model = HuggingFaceEmbedding(model_name="intfloat/multilingual-e5-large")
+embed_model = HuggingFaceEmbedding(model_name='intfloat/multilingual-e5-large')
+#embed_model = HuggingFaceEmbedding(model_name='sentence-transformers/all-mpnet-base-v2')
+#embed_model = HuggingFaceEmbedding(model_name='sentence-transformers/stsb-xlm-r-multilingual')
+
 Settings.embed_model = embed_model
 
 def create_vector_indices():

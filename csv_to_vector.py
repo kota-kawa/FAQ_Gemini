@@ -1,9 +1,7 @@
 import os
 import glob
+import pandas as pd
 from dotenv import load_dotenv
-
-# Word ドキュメント読み込み用
-from docx import Document as DocxDocument
 
 # LlamaIndex の主要モジュール
 from llama_index.core import Document, Settings, PromptHelper
@@ -15,9 +13,9 @@ from langchain_google_genai import GoogleGenerativeAI
 # .env ファイルから環境変数を読み込み（必要なら）
 load_dotenv()
 
-# Word ファイルが配置されるディレクトリと、インデックスの永続化先ディレクトリ
-WORD_DIR = "./static/sample_FAQ_docx"
-INDEX_DB_DIR = "./vdb2/vector_db_docx"
+# CSV ファイルが配置されるディレクトリと、インデックスの永続化先ディレクトリ
+CSV_DIR = "./static/sample_FAQ_csv"
+INDEX_DB_DIR = "./vdb2/vector_db_csv"
 os.makedirs(INDEX_DB_DIR, exist_ok=True)
 
 # テキスト分割用パラメータ
@@ -28,41 +26,49 @@ def split_text(text: str, chunk_size: int = CHUNK_SIZE, chunk_overlap: int = CHU
     """与えられたテキストを固定長チャンクに分割するシンプルな実装"""
     chunks = []
     start = 0
-    text_length = len(text)
-    while start < text_length:
-        end = min(text_length, start + chunk_size)
+    length = len(text)
+    while start < length:
+        end = min(length, start + chunk_size)
         chunks.append(text[start:end])
-        if end == text_length:
+        if end == length:
             break
         start = end - chunk_overlap
     return chunks
 
-def process_docx(docx_path: str) -> list[Document]:
+
+def process_csv(csv_path: str) -> list[Document]:
     """
-    .docx を読み込み、段落ごとにテキストをチャンクに分割して
+    CSV を読み込み、レコードごとにテキストをチャンクに分割して
     Document オブジェクトのリストを生成する。
-    各 Document には、元ファイル名と段落番号がメタデータとして付与される。
+    CSV は 'question','answer' ペアまたは 'text' カラムを想定。
+    各 Document には、元ファイル名と行番号がメタデータとして付与される。
     """
-    documents = []
+    documents: list[Document] = []
     try:
-        doc = DocxDocument(docx_path)
-        for para_idx, para in enumerate(doc.paragraphs):
-            text = para.text.strip()
-            if not text:
+        df = pd.read_csv(csv_path)
+        for idx, row in df.iterrows():
+            # 質問応答形式の場合
+            if 'question' in df.columns and 'answer' in df.columns:
+                text = f"Q: {row['question']}\nA: {row['answer']}"
+            # テキストフィールドがある場合
+            elif 'text' in df.columns:
+                text = row['text']
+            else:
                 continue
+
             metadata = {
-                "source": os.path.basename(docx_path),
-                "paragraph": para_idx + 1
+                'source': os.path.basename(csv_path),
+                'row': int(idx) + 1
             }
             for chunk in split_text(text):
                 documents.append(Document(text=chunk, extra_info=metadata))
         return documents
     except Exception as e:
-        print(f"Error processing {docx_path}: {e}")
+        print(f"Error processing {csv_path}: {e}")
         return []
 
 # LLM のインスタンスを生成し、Settings に設定
-llm = GoogleGenerativeAI(model="gemini-2.0-flash")
+llm = GoogleGenerativeAI(model='gemini-2.0-flash')
 Settings.llm = llm
 
 # PromptHelper の初期化（max_tokens, chunk_size, chunk_overlap_ratio）
@@ -77,25 +83,25 @@ Settings.embed_model = embed_model
 
 def create_vector_indices():
     """
-    Word (.docx) ファイルごとにベクトルインデックスを生成し、ディスクに永続化する関数
+    CSV ファイルごとにベクトルインデックスを生成し、ディスクに永続化する関数
     """
-    word_files = glob.glob(os.path.join(WORD_DIR, "*.docx"))
-    if not word_files:
-        raise FileNotFoundError(f"No Word files found in {WORD_DIR}")
-    
+    csv_files = glob.glob(os.path.join(CSV_DIR, '*.csv'))
+    if not csv_files:
+        raise FileNotFoundError(f"No CSV files found in {CSV_DIR}")
+
     try:
         from llama_index import VectorStoreIndex
     except ImportError:
         from llama_index.core.indices.vector_store.base import VectorStoreIndex
 
-    for word_file in word_files:
-        name = os.path.splitext(os.path.basename(word_file))[0]
+    for csv_file in csv_files:
+        name = os.path.splitext(os.path.basename(csv_file))[0]
         subdir = os.path.join(INDEX_DB_DIR, name)
         os.makedirs(subdir, exist_ok=True)
 
-        docs = process_docx(word_file)
+        docs = process_csv(csv_file)
         if not docs:
-            print(f"No valid text in {word_file}. Skipping...")
+            print(f"No valid records in {csv_file}. Skipping...")
             continue
 
         index = VectorStoreIndex.from_documents(
@@ -105,10 +111,10 @@ def create_vector_indices():
             embed_model=embed_model
         )
 
-        persist_dir = os.path.join(subdir, "persist")
+        persist_dir = os.path.join(subdir, 'persist')
         os.makedirs(persist_dir, exist_ok=True)
         index.storage_context.persist(persist_dir)
         print(f"Index saved for {name} to {persist_dir}")
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     create_vector_indices()
