@@ -14,8 +14,8 @@ from langchain_google_genai import GoogleGenerativeAI
 load_dotenv()
 
 # JSONL ファイルが配置されるディレクトリと、インデックスの永続化先ディレクトリ
-JSONL_DIR = "./static/sample_FAQ_jsonl"
-INDEX_DB_DIR = "./vdb2/vector_db_jsonl"
+JSONL_DIR = "./docx_to_qa/jsonl/preamble.jsonl"
+INDEX_DB_DIR = "./constitution_vector_db"
 os.makedirs(INDEX_DB_DIR, exist_ok=True)
 
 # テキスト分割用パラメータ
@@ -69,15 +69,15 @@ def process_jsonl(jsonl_path: str) -> list[Document]:
         return []
 
 # LLM のインスタンスを生成し、Settings に設定
-llm = GoogleGenerativeAI(model='gemini-2.0-flash')
+llm = GoogleGenerativeAI(model='gemini-2.5-flash')
 Settings.llm = llm
 
 # PromptHelper の初期化（max_tokens, chunk_size, chunk_overlap_ratio）
 prompt_helper = PromptHelper(4096, CHUNK_SIZE, CHUNK_OVERLAP / CHUNK_SIZE)
 
 # 埋め込みモデルを設定
-embed_model = HuggingFaceEmbedding(model_name='intfloat/multilingual-e5-large')
-#embed_model = HuggingFaceEmbedding(model_name='sentence-transformers/all-mpnet-base-v2')
+#embed_model = HuggingFaceEmbedding(model_name='intfloat/multilingual-e5-large')
+embed_model = HuggingFaceEmbedding(model_name='cl-nagoya/ruri-v3-310m')
 #embed_model = HuggingFaceEmbedding(model_name='sentence-transformers/stsb-xlm-r-multilingual')
 
 Settings.embed_model = embed_model
