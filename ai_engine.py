@@ -41,7 +41,7 @@ Settings.embed_model = embed_model
 Settings.prompt_helper = prompt_helper
 
 # ── インデックス設定 ──
-INDEX_DB_DIR = "./static/vector_db_csv_100"
+INDEX_DB_DIR = "./static/vector_db_csv"
 HISTORY_FILE = "conversation_history.json"
 
 def load_all_indices():
