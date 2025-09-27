@@ -18,6 +18,7 @@ from llama_index.core import (
 )
 from llama_index.core.settings import Settings
 from llama_index.core.postprocessor import SentenceTransformerRerank
+from llama_index.core.response_synthesizers import ResponseMode
 
 # ── 変更点: 埋め込みを HuggingFace(E5) → Google Gemini Embedding に切替 ──
 # 旧: from llama_index.embeddings.huggingface import HuggingFaceEmbedding
@@ -359,7 +360,7 @@ def get_answer(question: str):
         prompt_template=COMBINE_PROMPT,
         graph_query_kwargs={"top_k": NUM_INDICES},
         child_query_kwargs=child_kwargs,
-        response_mode="map_rerank",
+        response_mode=ResponseMode.COMPACT,
     )
     if node_postprocessors:
         query_engine_kwargs["node_postprocessors"] = node_postprocessors

@@ -6,7 +6,7 @@ numpy==2.2.4
 google-generativeai
 langchain==0.3.23
 langchain-community==0.3.21
-langchain_google_genai== 2.0.10
+langchain_google_genai==2.0.10
 langchain_google_vertexai==2.0.20
 
 sentence-transformers
@@ -15,4 +15,4 @@ llama-index==0.12.30
 llama-index-embeddings-huggingface==0.5.3
 llama-index-core==0.12.30
 llama-index-llms-langchain==0.6.1
-llama_index.embeddings.google_genai
+llama-index-embeddings-google==0.4.1
