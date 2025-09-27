@@ -24,6 +24,7 @@ from llama_index.core.settings import Settings
 from llama_index.core.prompts import PromptTemplate
 from llama_index.core.response_synthesizers import ResponseMode, get_response_synthesizer
 from llama_index.core.schema import NodeWithScore
+from llama_index.llms.langchain import LangChainLLM
 try:
     from llama_index.postprocessor.flag_embedding_reranker import FlagEmbeddingReranker
 except ModuleNotFoundError as exc:  # pragma: no cover - import guard
@@ -78,7 +79,8 @@ prompt_helper = PromptHelper(
 
 # ── LLM / 埋め込みモデル設定 ──
 # インデクシング / 検索の双方で RETRIEVAL_DOCUMENT を使用し、次元数を統一する。
-llm = GoogleGenerativeAI(model="gemini-2.5-flash")
+_langchain_gemini = GoogleGenerativeAI(model="gemini-2.5-flash")
+llm = _langchain_gemini
 
 embed_model = GoogleGenAIEmbedding(
     model_name="gemini-embedding-001",
@@ -88,7 +90,7 @@ embed_model = GoogleGenAIEmbedding(
     ),
 )
 
-Settings.llm = llm
+Settings.llm = LangChainLLM(llm=_langchain_gemini, system_prompt="")
 Settings.embed_model = embed_model
 Settings.prompt_helper = prompt_helper
 
@@ -198,7 +200,7 @@ def _tokenize_text(text: str) -> List[str]:
 
     tokens: List[str] = []
     try:
-        morphemes = tokenizer_obj.tokenize(split_mode, text)
+        morphemes = tokenizer_obj.tokenize(text, mode=split_mode)
     except Exception:
         logging.exception("SudachiPy でのトークン化に失敗しました。フォールバックします。")
         normalized = text.lower()
@@ -232,7 +234,7 @@ def _filter_candidate_terms_by_pos(terms: Sequence[str]) -> List[str]:
     filtered: List[str] = []
     for term in terms:
         try:
-            morphemes = tokenizer_obj.tokenize(split_mode, term)
+            morphemes = tokenizer_obj.tokenize(term, mode=split_mode)
         except Exception:
             continue
         for morpheme in morphemes:
