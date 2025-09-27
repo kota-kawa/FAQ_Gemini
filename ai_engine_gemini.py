@@ -79,8 +79,13 @@ prompt_helper = PromptHelper(
 
 # ── LLM / 埋め込みモデル設定 ──
 # インデクシング / 検索の双方で RETRIEVAL_DOCUMENT を使用し、次元数を統一する。
-_langchain_gemini = GoogleGenerativeAI(model="gemini-2.5-flash")
-llm = _langchain_gemini
+_gemini_chat_model = GoogleGenerativeAI(model="gemini-2.5-flash")
+
+# llama_index の LLM ラッパーは LangChainLLM を利用する。一方で、
+# クエリ書き換えや類似質問生成では LangChain 側の `invoke` API を直接
+# 呼び出すため、両者を明確に分離して保持しておく。
+GENERATION_LLM = _gemini_chat_model
+LLAMA_INDEX_LLM = LangChainLLM(llm=_gemini_chat_model, system_prompt="")
 
 embed_model = GoogleGenAIEmbedding(
     model_name="gemini-embedding-001",
@@ -90,7 +95,7 @@ embed_model = GoogleGenAIEmbedding(
     ),
 )
 
-Settings.llm = LangChainLLM(llm=_langchain_gemini, system_prompt="")
+Settings.llm = LLAMA_INDEX_LLM
 Settings.embed_model = embed_model
 Settings.prompt_helper = prompt_helper
 
@@ -430,7 +435,7 @@ def generate_semantic_queries(question: str, max_variants: int = 3) -> List[str]
 
     start = time.perf_counter()
     try:
-        raw_response = llm.invoke(prompt)
+        raw_response = GENERATION_LLM.invoke(prompt)
         if isinstance(raw_response, str):
             response_text = raw_response
         else:
@@ -682,7 +687,7 @@ def _rewrite_query(question: str, bm25_helper: Optional[SimpleBM25]) -> str:
 
     start = time.perf_counter()
     try:
-        raw_response = llm.invoke(prompt)
+        raw_response = GENERATION_LLM.invoke(prompt)
         if isinstance(raw_response, str):
             response_text = raw_response
         else:
@@ -831,7 +836,7 @@ except Exception:
 if graph_or_index is not None and COMBINE_PROMPT_TEMPLATE is not None:
     try:
         RESPONSE_SYNTHESIZER = get_response_synthesizer(
-            llm=llm,
+            llm=LLAMA_INDEX_LLM,
             prompt_helper=prompt_helper,
             text_qa_template=COMBINE_PROMPT_TEMPLATE,
             response_mode=ResponseMode.COMPACT,
