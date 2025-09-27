@@ -1,11 +1,14 @@
-import os
 import json
 import logging
 import math
+import os
 import re
+import threading
+import time
 from collections import Counter, defaultdict
-from difflib import SequenceMatcher
-from typing import Iterable, List, Optional, Sequence
+from dataclasses import dataclass, asdict
+from pathlib import Path
+from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 from dotenv import load_dotenv
 
 # llama_index 関連
@@ -17,8 +20,10 @@ from llama_index.core import (
     PromptHelper,
 )
 from llama_index.core.settings import Settings
-from llama_index.core.postprocessor import SentenceTransformerRerank
-from llama_index.core.response_synthesizers import ResponseMode
+from llama_index.core.prompts import PromptTemplate
+from llama_index.core.response_synthesizers import ResponseMode, get_response_synthesizer
+from llama_index.core.schema import NodeWithScore
+from llama_index.postprocessor.flag_embedding_reranker import FlagEmbeddingReranker
 
 # ── 変更点: 埋め込みを HuggingFace(E5) → Google Gemini Embedding に切替 ──
 # 旧: from llama_index.embeddings.huggingface import HuggingFaceEmbedding
@@ -27,6 +32,19 @@ from google.genai import types  # task_type や次元数などの指定用
 
 # LLM は Gemini（LangChain 経由）を継続使用
 from langchain_google_genai import GoogleGenerativeAI
+
+# 形態素解析 / 類義語取得
+try:
+    from sudachipy import dictionary as sudachi_dictionary
+    from sudachipy import tokenizer as sudachi_tokenizer
+except ImportError:  # pragma: no cover - runtime fallback
+    sudachi_dictionary = None
+    sudachi_tokenizer = None
+
+try:  # 任意: 日本語 WordNet
+    from wnja import WordNet as JapaneseWordNet
+except Exception:  # pragma: no cover - optional dependency
+    JapaneseWordNet = None
 
 # ── 環境変数 ──
 load_dotenv()
@@ -60,21 +78,193 @@ Settings.llm = llm
 Settings.embed_model = embed_model
 Settings.prompt_helper = prompt_helper
 
-try:
-    CROSS_ENCODER_RERANKER = SentenceTransformerRerank(
-        model="cross-encoder/ms-marco-MiniLM-L-12-v2",
-        top_n=6,
-    )
-except Exception:
-    logging.exception("Cross-Encoder の初期化に失敗しました。フォールバックします。")
-    CROSS_ENCODER_RERANKER = None
+EVAL_DIR = Path("evaluation")
+EVAL_RESULTS_FILE = EVAL_DIR / "latest_rerank_metrics.json"
+COST_LOG_FILE = EVAL_DIR / "query_pipeline_stats.json"
+KNOWN_QUESTIONS_FILE = EVAL_DIR / "known_questions.jsonl"
+
+DEFAULT_CHILD_QUERY_KWARGS: Dict[str, Optional[int]] = {
+    "similarity_top_k": 20,
+    "similarity_threshold": None,
+}
+BM25_TOP_DOCS = 6
+BM25_TOP_TERMS = 15
+RRF_K = 60
+RRF_TOP_N = 12
+RERANK_TOP_N = 8
+RERANK_SCORE_THRESHOLD = 0.35
+SYNTHESIS_TOP_K = 6
+
+_SUDACHI_LOCK = threading.Lock()
+_SUDACHI_TOKENIZER = None
+_SUDACHI_SPLIT_MODE = None
+_WORDNET_INSTANCE = None
+_TOKEN_PATTERN = re.compile(r"[\w一-龠ぁ-んァ-ンー]+")
+_CONTENT_POS_PREFIXES: Set[str] = {"名詞", "動詞", "形容詞", "副詞"}
+_EXCLUDE_SECOND_POS: Set[str] = {"数詞", "非自立"}
+
+
+@dataclass
+class QueryPipelineStats:
+    llm_calls: int = 0
+    total_latency_sec: float = 0.0
+    total_prompt_chars: int = 0
+    total_response_chars: int = 0
+    total_token_estimate: int = 0
+
+    def record(self, prompt_chars: int, response_chars: int, latency: float, token_estimate: Optional[int] = None) -> None:
+        self.llm_calls += 1
+        self.total_latency_sec += latency
+        self.total_prompt_chars += max(prompt_chars, 0)
+        self.total_response_chars += max(response_chars, 0)
+        if token_estimate:
+            self.total_token_estimate += max(token_estimate, 0)
+
+
+class QueryCostMonitor:
+    def __init__(self, log_path: Path):
+        self._log_path = log_path
+        self._lock = threading.Lock()
+        self._stats = QueryPipelineStats()
+
+    def record(self, prompt_chars: int, response_chars: int, latency: float, token_estimate: Optional[int] = None) -> None:
+        with self._lock:
+            self._stats.record(prompt_chars, response_chars, latency, token_estimate)
+            self._dump_locked()
+
+    def _dump_locked(self) -> None:
+        try:
+            self._log_path.parent.mkdir(parents=True, exist_ok=True)
+            with self._log_path.open("w", encoding="utf-8") as f:
+                json.dump(asdict(self._stats), f, ensure_ascii=False, indent=2)
+        except Exception:
+            logging.exception("クエリコスト情報の書き込みに失敗しました。")
+
+
+cost_monitor = QueryCostMonitor(COST_LOG_FILE)
+
+
+def _get_sudachi_tokenizer():
+    global _SUDACHI_TOKENIZER, _SUDACHI_SPLIT_MODE
+    if sudachi_dictionary is None or sudachi_tokenizer is None:
+        return None, None
+    if _SUDACHI_TOKENIZER is None:
+        with _SUDACHI_LOCK:
+            if _SUDACHI_TOKENIZER is None:
+                try:
+                    _SUDACHI_TOKENIZER = sudachi_dictionary.Dictionary().create()
+                    _SUDACHI_SPLIT_MODE = sudachi_tokenizer.Tokenizer.SplitMode.C
+                except Exception:
+                    logging.exception("SudachiPy の初期化に失敗しました。フォールバックします。")
+                    _SUDACHI_TOKENIZER = None
+                    _SUDACHI_SPLIT_MODE = None
+    return _SUDACHI_TOKENIZER, _SUDACHI_SPLIT_MODE
+
+
+def _get_japanese_wordnet():
+    global _WORDNET_INSTANCE
+    if JapaneseWordNet is None:
+        return None
+    if _WORDNET_INSTANCE is None:
+        try:
+            _WORDNET_INSTANCE = JapaneseWordNet()
+        except Exception:
+            logging.exception("Japanese WordNet の初期化に失敗しました。")
+            _WORDNET_INSTANCE = None
+    return _WORDNET_INSTANCE
 
 
 def _tokenize_text(text: str) -> List[str]:
     if not text:
         return []
+    tokenizer_obj, split_mode = _get_sudachi_tokenizer()
+    if tokenizer_obj is None or split_mode is None:
+        normalized = text.lower()
+        return _TOKEN_PATTERN.findall(normalized)
+
+    tokens: List[str] = []
+    try:
+        morphemes = tokenizer_obj.tokenize(split_mode, text)
+    except Exception:
+        logging.exception("SudachiPy でのトークン化に失敗しました。フォールバックします。")
+        normalized = text.lower()
+        return _TOKEN_PATTERN.findall(normalized)
+
+    for morpheme in morphemes:
+        pos = morpheme.part_of_speech() or ()
+        if not pos or pos[0] not in _CONTENT_POS_PREFIXES:
+            continue
+        if len(pos) > 1 and pos[1] in _EXCLUDE_SECOND_POS:
+            continue
+        lemma = morpheme.dictionary_form()
+        if lemma == "*":
+            lemma = morpheme.normalized_form()
+        lemma = (lemma or "").strip()
+        if lemma:
+            tokens.append(lemma)
+
+    if tokens:
+        return tokens
+
     normalized = text.lower()
-    return re.findall(r"[\w一-龠ぁ-んァ-ンー]+", normalized)
+    return _TOKEN_PATTERN.findall(normalized)
+
+
+def _filter_candidate_terms_by_pos(terms: Sequence[str]) -> List[str]:
+    tokenizer_obj, split_mode = _get_sudachi_tokenizer()
+    if tokenizer_obj is None or split_mode is None:
+        return [t for t in dict.fromkeys(terms) if len(t) > 1]
+
+    filtered: List[str] = []
+    for term in terms:
+        try:
+            morphemes = tokenizer_obj.tokenize(split_mode, term)
+        except Exception:
+            continue
+        for morpheme in morphemes:
+            pos = morpheme.part_of_speech() or ()
+            if not pos or pos[0] not in _CONTENT_POS_PREFIXES:
+                continue
+            if len(pos) > 1 and pos[1] in _EXCLUDE_SECOND_POS:
+                continue
+            lemma = morpheme.dictionary_form()
+            if lemma == "*":
+                lemma = morpheme.normalized_form()
+            lemma = (lemma or term).strip()
+            if lemma:
+                filtered.append(lemma)
+                break
+    return list(dict.fromkeys(filtered))
+
+
+def _lookup_japanese_synonyms(term: str) -> List[str]:
+    wordnet = _get_japanese_wordnet()
+    if wordnet is None:
+        return []
+    synonyms: Set[str] = set()
+    try:
+        for synset in wordnet.synsets(term):  # type: ignore[attr-defined]
+            for lemma in getattr(synset, "lemmas", lambda: [])():
+                name = getattr(lemma, "name", lambda: "")()
+                if not name:
+                    continue
+                name = name.replace("_", " ").strip()
+                if name and name != term:
+                    synonyms.add(name)
+    except Exception:
+        logging.debug("WordNet での類義語取得に失敗しました。", exc_info=True)
+    return list(synonyms)
+
+
+try:
+    FLAG_RERANKER = FlagEmbeddingReranker(
+        model="BAAI/bge-reranker-v2-m3",
+        top_n=RERANK_TOP_N,
+        similarity_threshold=RERANK_SCORE_THRESHOLD,
+    )
+except Exception:
+    logging.exception("FlagEmbedding リランカーの初期化に失敗しました。フォールバックします。")
+    FLAG_RERANKER = None
 
 
 class SimpleBM25:
@@ -182,26 +372,234 @@ def _collect_corpus_texts(source_indices: Sequence) -> List[str]:
     return corpus
 
 
-def _generate_synonym_candidates(tokens: Sequence[str], candidate_terms: Sequence[str]) -> List[str]:
-    synonyms: set[str] = set()
-    for token in tokens:
-        if len(token) <= 1:
+def _parse_generated_questions(raw_text: str, max_variants: int) -> List[str]:
+    if not raw_text:
+        return []
+    candidates: List[str] = []
+    for line in raw_text.splitlines():
+        stripped = line.strip()
+        if not stripped:
             continue
-        if token.endswith("s") and len(token) > 3:
-            synonyms.add(token[:-1])
-        if not token.endswith("s") and len(token) > 3:
-            synonyms.add(f"{token}s")
-        for candidate in candidate_terms:
-            if candidate == token or len(candidate) <= 1:
-                continue
-            if token in candidate or candidate in token:
-                synonyms.add(candidate)
-                continue
-            ratio = SequenceMatcher(None, token, candidate).ratio()
-            if ratio >= 0.82:
-                synonyms.add(candidate)
-    return list(synonyms)
+        stripped = stripped.lstrip("-•*0123456789. ")
+        if stripped:
+            candidates.append(stripped)
+        if len(candidates) >= max_variants:
+            break
+    return candidates[:max_variants]
 
+
+def generate_semantic_queries(question: str, max_variants: int = 3) -> List[str]:
+    if not question:
+        return []
+    prompt = (
+        "以下の質問と意味が近い日本語の質問文を{count}件生成してください。"
+        "箇条書きで1行ずつ出力し、元質問の語順だけを変える単純な言い換えは避けてください。\n\n"
+        "元質問: {question}"
+    ).format(count=max_variants, question=question)
+
+    start = time.perf_counter()
+    try:
+        raw_response = llm.invoke(prompt)
+        if isinstance(raw_response, str):
+            response_text = raw_response
+        else:
+            response_text = getattr(raw_response, "content", "") or str(raw_response)
+        variants = _parse_generated_questions(response_text, max_variants)
+        latency = time.perf_counter() - start
+        token_estimate = None
+        usage = getattr(raw_response, "response_metadata", None)
+        if isinstance(usage, dict):
+            token_estimate = usage.get("token_count") or usage.get("total_tokens")
+        cost_monitor.record(len(prompt), len(response_text), latency, token_estimate)
+        logging.debug("LLM生成クエリ: %s", variants)
+        return [v for v in variants if v and v != question]
+    except Exception:
+        latency = time.perf_counter() - start
+        cost_monitor.record(len(prompt), 0, latency, None)
+        logging.exception("Gemini によるクエリ拡張生成に失敗しました。")
+        return []
+
+
+def reciprocal_rank_fusion(result_sets: Sequence[Sequence[NodeWithScore]], top_n: int = RRF_TOP_N, k: int = RRF_K) -> List[NodeWithScore]:
+    if not result_sets:
+        return []
+    fused_scores: Dict[str, float] = {}
+    node_lookup: Dict[str, NodeWithScore] = {}
+
+    for nodes in result_sets:
+        for rank, node in enumerate(nodes):
+            node_obj = getattr(node, "node", None)
+            node_id = getattr(node_obj, "node_id", None) or getattr(node_obj, "id_", None) or getattr(node, "id", None)
+            if node_id is None:
+                node_id = str(id(node_obj))
+            fused_scores[node_id] = fused_scores.get(node_id, 0.0) + 1.0 / (k + rank + 1)
+            if node_id not in node_lookup:
+                node_lookup[node_id] = node
+
+    ranked_ids = sorted(fused_scores.items(), key=lambda kv: kv[1], reverse=True)
+    fused_nodes: List[NodeWithScore] = []
+    for node_id, score in ranked_ids[:top_n]:
+        original = node_lookup[node_id]
+        fused_nodes.append(NodeWithScore(node=original.node, score=score))
+    return fused_nodes
+
+
+def _apply_reranker(nodes: Sequence[NodeWithScore], query: str) -> List[NodeWithScore]:
+    if not nodes:
+        return []
+    if FLAG_RERANKER is None:
+        return sorted(nodes, key=lambda n: n.score or 0.0, reverse=True)[:RERANK_TOP_N]
+
+    try:
+        reranked = FLAG_RERANKER.postprocess_nodes(list(nodes), query_str=query)
+    except Exception:
+        logging.exception("FlagEmbedding リランカーでの再ランキングに失敗しました。")
+        return sorted(nodes, key=lambda n: n.score or 0.0, reverse=True)[:RERANK_TOP_N]
+
+    filtered: List[NodeWithScore] = []
+    for node in reranked:
+        score = getattr(node, "score", None)
+        if score is None or score >= RERANK_SCORE_THRESHOLD:
+            filtered.append(node)
+    if not filtered:
+        filtered = list(reranked)[:RERANK_TOP_N]
+    return filtered[:RERANK_TOP_N]
+
+
+def _retrieve_nodes_for_query(query_text: str):
+    if RETRIEVAL_QUERY_ENGINE is None:
+        return []
+    try:
+        response = RETRIEVAL_QUERY_ENGINE.query(query_text)
+    except Exception:
+        logging.exception("クエリエンジンによる検索に失敗しました。")
+        return []
+    return getattr(response, "source_nodes", []) or []
+
+
+def _collect_results_for_queries(queries: Sequence[str]) -> List[List[NodeWithScore]]:
+    results: List[List[NodeWithScore]] = []
+    for query in queries:
+        expanded = _expand_query(query, bm25_helper)
+        nodes = _retrieve_nodes_for_query(expanded)
+        if nodes:
+            results.append(nodes)
+    return results
+
+
+def retrieve_reranked_nodes(question: str, use_llm_expansion: bool = True) -> Tuple[List[NodeWithScore], List[str]]:
+    variants = generate_semantic_queries(question) if use_llm_expansion else []
+    query_list = [question] + [v for v in variants if v]
+    deduped_queries = list(dict.fromkeys(query_list))
+    result_sets = _collect_results_for_queries(deduped_queries)
+
+    if result_sets:
+        fused_nodes = reciprocal_rank_fusion(result_sets)
+    else:
+        fallback_nodes = _retrieve_nodes_for_query(_expand_query(question, bm25_helper))
+        fused_nodes = [
+            NodeWithScore(node=getattr(node, "node", node), score=getattr(node, "score", None))
+            for node in fallback_nodes
+        ]
+
+    reranked_nodes = _apply_reranker(fused_nodes, question)
+    return reranked_nodes, variants
+
+
+def _extract_source_info(node: NodeWithScore) -> Tuple[Optional[str], Optional[str]]:
+    metadata = getattr(node, "extra_info", {}) or getattr(node, "metadata", {}) or {}
+    source = metadata.get("source") or metadata.get("file")
+    page = metadata.get("page") or metadata.get("page_number") or metadata.get("page_index")
+    if page is not None:
+        page = str(page)
+    return source, page
+
+
+def _build_reference_dict(nodes: Sequence[NodeWithScore]) -> Dict[str, Set[str]]:
+    references: Dict[str, Set[str]] = {}
+    for node in nodes:
+        source, page = _extract_source_info(node)
+        if not source:
+            continue
+        if source not in references:
+            references[source] = set()
+        if page:
+            references[source].add(page)
+    return references
+
+
+def evaluate_known_questions(
+    file_path: Path = KNOWN_QUESTIONS_FILE,
+    recall_targets: Sequence[int] = (1, 3, 5, 10),
+) -> Optional[Dict[str, float]]:
+    if graph_or_index is None or RETRIEVAL_QUERY_ENGINE is None:
+        logging.info("インデックス未初期化のため評価をスキップします。")
+        return None
+
+    path = Path(file_path)
+    if not path.exists() or path.stat().st_size == 0:
+        logging.info("既知質問セットが存在しないため評価をスキップします: %s", path)
+        return None
+
+    recall_counts: Dict[int, float] = {k: 0.0 for k in recall_targets}
+    mrr_sum = 0.0
+    total = 0
+
+    with path.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                logging.warning("評価データの JSON パースに失敗しました: %s", line)
+                continue
+            question = record.get("question")
+            relevant_sources = record.get("relevant_sources") or []
+            if not question or not relevant_sources:
+                continue
+
+            nodes, _ = retrieve_reranked_nodes(question, use_llm_expansion=False)
+            ranked_sources = [
+                src for src, _ in (_extract_source_info(node) for node in nodes) if src
+            ]
+            if not ranked_sources:
+                continue
+
+            total += 1
+            relevant_set = set(relevant_sources)
+            for k in recall_targets:
+                top_sources = ranked_sources[:k]
+                if any(src in relevant_set for src in top_sources):
+                    recall_counts[k] += 1
+
+            reciprocal_rank = 0.0
+            for idx, src in enumerate(ranked_sources):
+                if src in relevant_set:
+                    reciprocal_rank = 1.0 / (idx + 1)
+                    break
+            mrr_sum += reciprocal_rank
+
+    if total == 0:
+        logging.info("評価対象の質問が見つからなかったため、結果を保存しません。")
+        return None
+
+    metrics: Dict[str, float] = {
+        f"recall@{k}": recall_counts[k] / total for k in recall_targets
+    }
+    metrics["mrr"] = mrr_sum / total
+    metrics["evaluated_questions"] = float(total)
+
+    try:
+        EVAL_DIR.mkdir(parents=True, exist_ok=True)
+        with EVAL_RESULTS_FILE.open("w", encoding="utf-8") as f:
+            json.dump(metrics, f, ensure_ascii=False, indent=2)
+    except Exception:
+        logging.exception("評価結果の保存に失敗しました。")
+
+    logging.info("Reranker evaluation metrics: %s", metrics)
+    return metrics
 
 def _expand_query(question: str, bm25_helper: Optional[SimpleBM25]) -> str:
     tokens = _tokenize_text(question)
@@ -211,11 +609,14 @@ def _expand_query(question: str, bm25_helper: Optional[SimpleBM25]) -> str:
     expanded_terms: List[str] = []
     candidate_terms: List[str] = []
     if bm25_helper:
-        candidate_terms = bm25_helper.top_terms(tokens, top_docs=6, top_terms=12)
-        expanded_terms.extend(candidate_terms)
+        candidate_terms = bm25_helper.top_terms(tokens, top_docs=BM25_TOP_DOCS, top_terms=BM25_TOP_TERMS)
+        expanded_terms.extend(_filter_candidate_terms_by_pos(candidate_terms))
 
-    synonym_terms = _generate_synonym_candidates(tokens, candidate_terms)
-    expanded_terms.extend(synonym_terms)
+    synonym_terms: List[str] = []
+    for term in expanded_terms:
+        synonym_terms.extend(_lookup_japanese_synonyms(term))
+    if synonym_terms:
+        expanded_terms.extend(synonym_terms)
 
     additional = [term for term in expanded_terms if term and term not in tokens]
     if not additional:
@@ -230,6 +631,9 @@ INDEX_DB_DIR = "./constitution_vector_db"
 HISTORY_FILE = "conversation_history.json"
 
 bm25_helper: Optional[SimpleBM25] = None
+RETRIEVAL_QUERY_ENGINE = None
+RESPONSE_SYNTHESIZER = None
+COMBINE_PROMPT_TEMPLATE: Optional[PromptTemplate] = None
 
 
 def load_all_indices():
@@ -273,11 +677,17 @@ try:
         )
     bm25_corpus = _collect_corpus_texts(indices)
     bm25_helper = SimpleBM25(bm25_corpus) if bm25_corpus else None
+    RETRIEVAL_QUERY_ENGINE = graph_or_index.as_query_engine(
+        graph_query_kwargs={"top_k": NUM_INDICES},
+        child_query_kwargs=DEFAULT_CHILD_QUERY_KWARGS,
+        response_mode=ResponseMode.NO_TEXT,
+    )
 except Exception:
     logging.exception("Indexの初期化に失敗しました。")
     graph_or_index = None
     NUM_INDICES = 0
     bm25_helper = None
+    RETRIEVAL_QUERY_ENGINE = None
 
 
 # ── 会話履歴ユーティリティ ──
@@ -302,8 +712,8 @@ def save_conversation_history(hist):
 # ── プロンプト ──
 COMBINE_PROMPT = """あなたは、資料を基にユーザーの問いに対してサポートするためのアシスタントです。
 
-以下の回答候補を統合して、最終的な回答を作成してください。  
-【回答候補】  
+以下の回答候補を統合して、最終的な回答を作成してください。
+【回答候補】
 {summaries}
 
 【統合ルール】  
@@ -328,91 +738,67 @@ COMBINE_PROMPT = """あなたは、資料を基にユーザーの問いに対し
         そちらをご確認いただくか、直接メーカーにお問い合わせいただくことをお勧めします。
 """
 
+try:
+    COMBINE_PROMPT_TEMPLATE = PromptTemplate(COMBINE_PROMPT)
+except Exception:
+    logging.exception("統合プロンプトの初期化に失敗しました。")
+    COMBINE_PROMPT_TEMPLATE = None
+
+if graph_or_index is not None and COMBINE_PROMPT_TEMPLATE is not None:
+    try:
+        RESPONSE_SYNTHESIZER = get_response_synthesizer(
+            llm=llm,
+            prompt_helper=prompt_helper,
+            text_qa_template=COMBINE_PROMPT_TEMPLATE,
+            response_mode=ResponseMode.COMPACT,
+        )
+    except Exception:
+        logging.exception("応答生成器の初期化に失敗しました。")
+        RESPONSE_SYNTHESIZER = None
+
+try:
+    evaluate_known_questions()
+except Exception:
+    logging.exception("再ランキング評価の実行に失敗しました。")
+
 
 # ── 公開 API ──
 def get_answer(question: str):
     """質問文字列を受け取り、RAG 結果（answer, sources）を返す"""
-    if graph_or_index is None:
-        raise RuntimeError("インデックスが初期化されていません。")
+    if graph_or_index is None or RESPONSE_SYNTHESIZER is None:
+        raise RuntimeError("インデックスまたは応答生成器が初期化されていません。")
 
     question = question.strip()
     if not question:
         raise ValueError("質問を入力してください。")
 
-    # 会話履歴に保存（ただし検索クエリ自体は履歴を結合せず、生の質問を用いる）
     history = load_conversation_history()
     history.append({"role": "User", "message": question})
 
-    # クエリテキスト（ここでは生の質問を用いる）
-    query_text = _expand_query(question, bm25_helper)
+    reranked_nodes, generated_variants = retrieve_reranked_nodes(question, use_llm_expansion=True)
 
-    # クエリエンジン生成（各サブインデックスを横断）
-    child_kwargs = {
-        "similarity_top_k": 10,
-        "similarity_threshold": None,
-    }
-    node_postprocessors = []
-    if CROSS_ENCODER_RERANKER is not None:
-        node_postprocessors.append(CROSS_ENCODER_RERANKER)
-        child_kwargs["node_postprocessors"] = node_postprocessors
+    nodes_for_answer = reranked_nodes[:SYNTHESIS_TOP_K] if reranked_nodes else []
+    if not nodes_for_answer:
+        nodes_for_answer = _retrieve_nodes_for_query(_expand_query(question, bm25_helper))
 
-    query_engine_kwargs = dict(
-        prompt_template=COMBINE_PROMPT,
-        graph_query_kwargs={"top_k": NUM_INDICES},
-        child_query_kwargs=child_kwargs,
-        response_mode=ResponseMode.COMPACT,
-    )
-    if node_postprocessors:
-        query_engine_kwargs["node_postprocessors"] = node_postprocessors
+    response = RESPONSE_SYNTHESIZER.synthesize(question, nodes_for_answer)
+    answer_text = getattr(response, "response", str(response))
 
-    query_engine = graph_or_index.as_query_engine(**query_engine_kwargs)
-
-    # 実行
-    response = query_engine.query(query_text)
-    answer = response.response
-
-    # 参照上位 3 ファイル抽出
-    nodes = getattr(response, "source_nodes", []) or []
-    if nodes and CROSS_ENCODER_RERANKER is not None:
-        filtered = []
-        for node in nodes:
-            score = getattr(node, "score", None)
-            if score is None or score >= 0.1:
-                filtered.append(node)
-        if filtered:
-            nodes = filtered
-    sorted_nodes = sorted(nodes, key=lambda n: getattr(n, "score", 0), reverse=True)
-
-    top_srcs = []
-    for n in sorted_nodes:
-        meta = getattr(n, "extra_info", {}) or {}
-        src = meta.get("source") or getattr(n, "metadata", {}).get("source")
-        if src and src != "不明ファイル" and src not in top_srcs:
-            top_srcs.append(src)
-        if len(top_srcs) == 3:
-            break
-
-    ref_dict = {s: set() for s in top_srcs}
-    for n in nodes:
-        meta = getattr(n, "extra_info", {}) or {}
-        s = meta.get("source") or getattr(n, "metadata", {}).get("source")
-        if s in ref_dict:
-            pg = meta.get("page") or getattr(n, "metadata", {}).get("page") or "不明"
-            ref_dict[s].add(str(pg))
-
-    if ref_dict:
+    reference_dict = _build_reference_dict(nodes_for_answer)
+    top_sources = list(reference_dict.keys())[:3]
+    if reference_dict:
         refs = ", ".join(
-            f"{s} (page: {', '.join(sorted(pgs))})" for s, pgs in ref_dict.items()
+            f"{src} (page: {', '.join(sorted(pages))})" if pages else src
+            for src, pages in reference_dict.items()
         )
-        final = answer + "\n\n【使用したファイル】\n" + refs
+        final_answer = answer_text + "\n\n【使用したファイル】\n" + refs
     else:
-        final = answer
+        final_answer = answer_text
 
-    # 履歴保存
-    history.append({"role": "AI", "message": final})
+    history.append({"role": "AI", "message": final_answer, "generated_queries": generated_variants})
     save_conversation_history(history)
 
-    return final, list(ref_dict.keys())
+    return final_answer, top_sources
 
 
 def reset_history():
