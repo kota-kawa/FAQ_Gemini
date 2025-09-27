@@ -13,6 +13,7 @@ SudachiPy
 sudachidict_core
 flagembedding
 sentencepiece
+llama-index-postprocessor-flag-embedding-reranker==0.3.0
 llama-index==0.12.30
 llama-index-embeddings-huggingface==0.5.3
 llama-index-core==0.12.30
