@@ -1,6 +1,11 @@
 import os
 import json
 import logging
+import math
+import re
+from collections import Counter, defaultdict
+from difflib import SequenceMatcher
+from typing import Iterable, List, Optional, Sequence
 from dotenv import load_dotenv
 
 # llama_index 関連
@@ -12,6 +17,7 @@ from llama_index.core import (
     PromptHelper,
 )
 from llama_index.core.settings import Settings
+from llama_index.core.postprocessor import SentenceTransformerRerank
 
 # ── 変更点: 埋め込みを HuggingFace(E5) → Google Gemini Embedding に切替 ──
 # 旧: from llama_index.embeddings.huggingface import HuggingFaceEmbedding
@@ -53,9 +59,176 @@ Settings.llm = llm
 Settings.embed_model = embed_model
 Settings.prompt_helper = prompt_helper
 
+try:
+    CROSS_ENCODER_RERANKER = SentenceTransformerRerank(
+        model="cross-encoder/ms-marco-MiniLM-L-12-v2",
+        top_n=6,
+    )
+except Exception:
+    logging.exception("Cross-Encoder の初期化に失敗しました。フォールバックします。")
+    CROSS_ENCODER_RERANKER = None
+
+
+def _tokenize_text(text: str) -> List[str]:
+    if not text:
+        return []
+    normalized = text.lower()
+    return re.findall(r"[\w一-龠ぁ-んァ-ンー]+", normalized)
+
+
+class SimpleBM25:
+    def __init__(self, documents: Sequence[str], tokenizer=_tokenize_text):
+        self._documents = list(documents)
+        self._tokenizer = tokenizer
+        self._tokenized_docs: List[List[str]] = []
+        self._doc_freqs: List[Counter] = []
+        self._df: defaultdict[str, int] = defaultdict(int)
+        self._avgdl: float = 0.0
+        if not self._documents:
+            return
+
+        total_len = 0
+        for doc in self._documents:
+            tokens = self._tokenizer(doc)
+            self._tokenized_docs.append(tokens)
+            counter = Counter(tokens)
+            self._doc_freqs.append(counter)
+            for term in counter.keys():
+                self._df[term] += 1
+            total_len += len(tokens)
+        self._avgdl = total_len / len(self._tokenized_docs) if self._tokenized_docs else 0.0
+        self._idf_cache: dict[str, float] = {}
+
+    def _idf(self, term: str) -> float:
+        if term in self._idf_cache:
+            return self._idf_cache[term]
+        df = self._df.get(term, 0)
+        n_docs = len(self._tokenized_docs)
+        idf = math.log(1 + (n_docs - df + 0.5) / (df + 0.5)) if n_docs else 0.0
+        self._idf_cache[term] = idf
+        return idf
+
+    def _score(self, query_tokens: Sequence[str], doc_index: int, k1: float = 1.5, b: float = 0.75) -> float:
+        if not self._tokenized_docs:
+            return 0.0
+        tokens = self._tokenized_docs[doc_index]
+        if not tokens:
+            return 0.0
+        doc_len = len(tokens)
+        score = 0.0
+        freqs = self._doc_freqs[doc_index]
+        for term in query_tokens:
+            if term not in freqs:
+                continue
+            idf = self._idf(term)
+            freq = freqs[term]
+            denom = freq + k1 * (1 - b + b * doc_len / (self._avgdl or 1.0))
+            score += idf * (freq * (k1 + 1)) / (denom or 1.0)
+        return score
+
+    def top_documents(self, query_tokens: Sequence[str], top_n: int = 5):
+        if not self._tokenized_docs or not query_tokens:
+            return []
+        scores = [self._score(query_tokens, idx) for idx in range(len(self._tokenized_docs))]
+        ranked_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:top_n]
+        return [
+            (self._documents[i], scores[i], self._tokenized_docs[i])
+            for i in ranked_indices
+            if scores[i] > 0
+        ]
+
+    def top_terms(self, query_tokens: Sequence[str], top_docs: int = 5, top_terms: int = 8) -> List[str]:
+        ranked_docs = self.top_documents(query_tokens, top_docs)
+        if not ranked_docs:
+            return []
+        term_counter: Counter[str] = Counter()
+        query_set = set(query_tokens)
+        for _, _, tokens in ranked_docs:
+            for token in tokens:
+                if len(token) <= 1 or token in query_set:
+                    continue
+                term_counter[token] += 1
+        return [term for term, _ in term_counter.most_common(top_terms)]
+
+
+def _collect_corpus_texts(source_indices: Sequence) -> List[str]:
+    corpus: List[str] = []
+    for idx in source_indices:
+        candidates: Iterable = []
+        try:
+            docstore = getattr(idx, "docstore", None)
+            if docstore and getattr(docstore, "docs", None):
+                candidates = docstore.docs.values()
+            elif getattr(idx, "storage_context", None):
+                storage = idx.storage_context
+                if storage and getattr(storage, "docstore", None) and getattr(storage.docstore, "docs", None):
+                    candidates = storage.docstore.docs.values()
+        except Exception:
+            logging.exception("Docstore からコーパス抽出に失敗しました。")
+            continue
+
+        for node in candidates:
+            text: Optional[str] = None
+            if hasattr(node, "text") and isinstance(node.text, str):
+                text = node.text
+            elif hasattr(node, "get_content"):
+                try:
+                    text = node.get_content()
+                except Exception:
+                    text = None
+            if text:
+                corpus.append(text)
+    return corpus
+
+
+def _generate_synonym_candidates(tokens: Sequence[str], candidate_terms: Sequence[str]) -> List[str]:
+    synonyms: set[str] = set()
+    for token in tokens:
+        if len(token) <= 1:
+            continue
+        if token.endswith("s") and len(token) > 3:
+            synonyms.add(token[:-1])
+        if not token.endswith("s") and len(token) > 3:
+            synonyms.add(f"{token}s")
+        for candidate in candidate_terms:
+            if candidate == token or len(candidate) <= 1:
+                continue
+            if token in candidate or candidate in token:
+                synonyms.add(candidate)
+                continue
+            ratio = SequenceMatcher(None, token, candidate).ratio()
+            if ratio >= 0.82:
+                synonyms.add(candidate)
+    return list(synonyms)
+
+
+def _expand_query(question: str, bm25_helper: Optional[SimpleBM25]) -> str:
+    tokens = _tokenize_text(question)
+    if not tokens:
+        return question
+
+    expanded_terms: List[str] = []
+    candidate_terms: List[str] = []
+    if bm25_helper:
+        candidate_terms = bm25_helper.top_terms(tokens, top_docs=6, top_terms=12)
+        expanded_terms.extend(candidate_terms)
+
+    synonym_terms = _generate_synonym_candidates(tokens, candidate_terms)
+    expanded_terms.extend(synonym_terms)
+
+    additional = [term for term in expanded_terms if term and term not in tokens]
+    if not additional:
+        return question
+
+    expanded_query = question + " " + " ".join(dict.fromkeys(additional))
+    logging.debug("Expanded query: %s -> %s", question, expanded_query)
+    return expanded_query
+
 # ── インデックス設定 ──
 INDEX_DB_DIR = "./constitution_vector_db"
 HISTORY_FILE = "conversation_history.json"
+
+bm25_helper: Optional[SimpleBM25] = None
 
 
 def load_all_indices():
@@ -97,10 +270,13 @@ try:
             indices,
             index_summaries=index_summaries,
         )
+    bm25_corpus = _collect_corpus_texts(indices)
+    bm25_helper = SimpleBM25(bm25_corpus) if bm25_corpus else None
 except Exception:
     logging.exception("Indexの初期化に失敗しました。")
     graph_or_index = None
     NUM_INDICES = 0
+    bm25_helper = None
 
 
 # ── 会話履歴ユーティリティ ──
@@ -167,18 +343,28 @@ def get_answer(question: str):
     history.append({"role": "User", "message": question})
 
     # クエリテキスト（ここでは生の質問を用いる）
-    query_text = question
+    query_text = _expand_query(question, bm25_helper)
 
     # クエリエンジン生成（各サブインデックスを横断）
-    query_engine = graph_or_index.as_query_engine(
+    child_kwargs = {
+        "similarity_top_k": 10,
+        "similarity_threshold": None,
+    }
+    node_postprocessors = []
+    if CROSS_ENCODER_RERANKER is not None:
+        node_postprocessors.append(CROSS_ENCODER_RERANKER)
+        child_kwargs["node_postprocessors"] = node_postprocessors
+
+    query_engine_kwargs = dict(
         prompt_template=COMBINE_PROMPT,
         graph_query_kwargs={"top_k": NUM_INDICES},
-        child_query_kwargs={
-            "similarity_top_k": 5,
-            "similarity_threshold": 0.2,
-        },
-        response_mode="tree_summarize",
+        child_query_kwargs=child_kwargs,
+        response_mode="map_rerank",
     )
+    if node_postprocessors:
+        query_engine_kwargs["node_postprocessors"] = node_postprocessors
+
+    query_engine = graph_or_index.as_query_engine(**query_engine_kwargs)
 
     # 実行
     response = query_engine.query(query_text)
@@ -186,6 +372,14 @@ def get_answer(question: str):
 
     # 参照上位 3 ファイル抽出
     nodes = getattr(response, "source_nodes", []) or []
+    if nodes and CROSS_ENCODER_RERANKER is not None:
+        filtered = []
+        for node in nodes:
+            score = getattr(node, "score", None)
+            if score is None or score >= 0.1:
+                filtered.append(node)
+        if filtered:
+            nodes = filtered
     sorted_nodes = sorted(nodes, key=lambda n: getattr(n, "score", 0), reverse=True)
 
     top_srcs = []
