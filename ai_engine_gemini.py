@@ -1,3 +1,4 @@
+import inspect
 import json
 import logging
 import math
@@ -23,7 +24,13 @@ from llama_index.core.settings import Settings
 from llama_index.core.prompts import PromptTemplate
 from llama_index.core.response_synthesizers import ResponseMode, get_response_synthesizer
 from llama_index.core.schema import NodeWithScore
-from llama_index.postprocessor.flag_embedding_reranker import FlagEmbeddingReranker
+try:
+    from llama_index.postprocessor.flag_embedding_reranker import FlagEmbeddingReranker
+except ModuleNotFoundError as exc:  # pragma: no cover - import guard
+    FlagEmbeddingReranker = None  # type: ignore[assignment]
+    _FLAG_RERANKER_IMPORT_ERROR = exc
+else:
+    _FLAG_RERANKER_IMPORT_ERROR = None
 
 # ── 変更点: 埋め込みを HuggingFace(E5) → Google Gemini Embedding に切替 ──
 # 旧: from llama_index.embeddings.huggingface import HuggingFaceEmbedding
@@ -50,6 +57,14 @@ except Exception:  # pragma: no cover - optional dependency
 load_dotenv()
 os.environ["GOOGLE_API_KEY"] = os.getenv("GOOGLE_API_KEY") or ""
 logging.basicConfig(level=logging.DEBUG)
+
+if _FLAG_RERANKER_IMPORT_ERROR is not None:
+    logging.warning(
+        "FlagEmbeddingReranker の読み込みに失敗しました。"
+        "パッケージ 'llama-index-postprocessor-flag-embedding-reranker>=0.3.0' の"
+        " インストール状況を確認してください: %s",
+        _FLAG_RERANKER_IMPORT_ERROR,
+    )
 
 # ── チャンク設定（FAQ 例を想定） ──
 CHUNK_SIZE = 1000
@@ -256,14 +271,28 @@ def _lookup_japanese_synonyms(term: str) -> List[str]:
     return list(synonyms)
 
 
-try:
-    FLAG_RERANKER = FlagEmbeddingReranker(
-        model="BAAI/bge-reranker-v2-m3",
-        top_n=RERANK_TOP_N,
-        similarity_threshold=RERANK_SCORE_THRESHOLD,
-    )
-except Exception:
-    logging.exception("FlagEmbedding リランカーの初期化に失敗しました。フォールバックします。")
+if FlagEmbeddingReranker is not None:
+    reranker_kwargs = {
+        "model": "BAAI/bge-reranker-v2-m3",
+        "top_n": RERANK_TOP_N,
+    }
+    try:
+        reranker_params = inspect.signature(FlagEmbeddingReranker).parameters
+    except (TypeError, ValueError):  # pragma: no cover - dynamic inspection safety
+        reranker_params = {}
+    if "similarity_threshold" in reranker_params:
+        reranker_kwargs["similarity_threshold"] = RERANK_SCORE_THRESHOLD
+    else:
+        logging.debug(
+            "FlagEmbeddingReranker が similarity_threshold を未サポートのため、"
+            "後段のスコアフィルタで代替します。"
+        )
+    try:
+        FLAG_RERANKER = FlagEmbeddingReranker(**reranker_kwargs)
+    except Exception:
+        logging.exception("FlagEmbedding リランカーの初期化に失敗しました。フォールバックします。")
+        FLAG_RERANKER = None
+else:
     FLAG_RERANKER = None
 
 
