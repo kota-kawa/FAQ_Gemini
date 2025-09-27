@@ -9,7 +9,11 @@ langchain-community==0.3.21
 langchain_google_genai==2.0.10
 langchain_google_vertexai==2.0.20
 
-sentence-transformers
+SudachiPy
+sudachidict_core
+wnja
+flagembedding
+llama-index-postprocessor-flagembedding==0.2.0
 sentencepiece
 llama-index==0.12.30
 llama-index-embeddings-huggingface==0.5.3
