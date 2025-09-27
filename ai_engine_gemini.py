@@ -77,14 +77,13 @@ prompt_helper = PromptHelper(
 )
 
 # ── LLM / 埋め込みモデル設定 ──
-# ※ インデクシング側（jsonl_to_vector.py）は RETRIEVAL_DOCUMENT を使用。
-#    本ファイル（検索側）はクエリ埋め込みなので RETRIEVAL_QUERY を使用し、次元数も一致(768)させる。
+# インデクシング / 検索の双方で RETRIEVAL_DOCUMENT を使用し、次元数を統一する。
 llm = GoogleGenerativeAI(model="gemini-2.5-flash")
 
 embed_model = GoogleGenAIEmbedding(
     model_name="gemini-embedding-001",
     embedding_config=types.EmbedContentConfig(
-        task_type="RETRIEVAL_QUERY",
+        task_type="RETRIEVAL_DOCUMENT",
         output_dimensionality=768
     ),
 )
@@ -107,7 +106,7 @@ BM25_TOP_TERMS = 15
 RRF_K = 60
 RRF_TOP_N = 12
 RERANK_TOP_N = 8
-RERANK_SCORE_THRESHOLD = 0.35
+RERANK_SCORE_THRESHOLD: Optional[float] = None
 SYNTHESIS_TOP_K = 6
 
 _SUDACHI_LOCK = threading.Lock()
@@ -281,8 +280,9 @@ if FlagEmbeddingReranker is not None:
     except (TypeError, ValueError):  # pragma: no cover - dynamic inspection safety
         reranker_params = {}
     if "similarity_threshold" in reranker_params:
-        reranker_kwargs["similarity_threshold"] = RERANK_SCORE_THRESHOLD
-    else:
+        if RERANK_SCORE_THRESHOLD is not None:
+            reranker_kwargs["similarity_threshold"] = RERANK_SCORE_THRESHOLD
+    elif RERANK_SCORE_THRESHOLD is not None:
         logging.debug(
             "FlagEmbeddingReranker が similarity_threshold を未サポートのため、"
             "後段のスコアフィルタで代替します。"
@@ -433,6 +433,8 @@ def generate_semantic_queries(question: str, max_variants: int = 3) -> List[str]
             response_text = raw_response
         else:
             response_text = getattr(raw_response, "content", "") or str(raw_response)
+        if not isinstance(response_text, str):
+            response_text = str(response_text)
         variants = _parse_generated_questions(response_text, max_variants)
         latency = time.perf_counter() - start
         token_estimate = None
@@ -485,11 +487,14 @@ def _apply_reranker(nodes: Sequence[NodeWithScore], query: str) -> List[NodeWith
         logging.exception("FlagEmbedding リランカーでの再ランキングに失敗しました。")
         return sorted(nodes, key=lambda n: n.score or 0.0, reverse=True)[:RERANK_TOP_N]
 
-    filtered: List[NodeWithScore] = []
-    for node in reranked:
-        score = getattr(node, "score", None)
-        if score is None or score >= RERANK_SCORE_THRESHOLD:
-            filtered.append(node)
+    if RERANK_SCORE_THRESHOLD is None:
+        filtered: List[NodeWithScore] = list(reranked)
+    else:
+        filtered = []
+        for node in reranked:
+            score = getattr(node, "score", None)
+            if score is None or score >= RERANK_SCORE_THRESHOLD:
+                filtered.append(node)
     if not filtered:
         filtered = list(reranked)[:RERANK_TOP_N]
     return filtered[:RERANK_TOP_N]
@@ -509,7 +514,7 @@ def _retrieve_nodes_for_query(query_text: str):
 def _collect_results_for_queries(queries: Sequence[str]) -> List[List[NodeWithScore]]:
     results: List[List[NodeWithScore]] = []
     for query in queries:
-        expanded = _expand_query(query, bm25_helper)
+        expanded = _rewrite_query(query, bm25_helper)
         nodes = _retrieve_nodes_for_query(expanded)
         if nodes:
             results.append(nodes)
@@ -525,7 +530,7 @@ def retrieve_reranked_nodes(question: str, use_llm_expansion: bool = True) -> Tu
     if result_sets:
         fused_nodes = reciprocal_rank_fusion(result_sets)
     else:
-        fallback_nodes = _retrieve_nodes_for_query(_expand_query(question, bm25_helper))
+        fallback_nodes = _retrieve_nodes_for_query(_rewrite_query(question, bm25_helper))
         fused_nodes = [
             NodeWithScore(node=getattr(node, "node", node), score=getattr(node, "score", None))
             for node in fallback_nodes
@@ -630,30 +635,78 @@ def evaluate_known_questions(
     logging.info("Reranker evaluation metrics: %s", metrics)
     return metrics
 
-def _expand_query(question: str, bm25_helper: Optional[SimpleBM25]) -> str:
-    tokens = _tokenize_text(question)
-    if not tokens:
+_QUERY_REWRITE_CACHE: Dict[str, str] = {}
+
+
+def _rewrite_query(question: str, bm25_helper: Optional[SimpleBM25]) -> str:
+    normalized = (question or "").strip()
+    if not normalized:
         return question
 
-    expanded_terms: List[str] = []
-    candidate_terms: List[str] = []
-    if bm25_helper:
+    cached = _QUERY_REWRITE_CACHE.get(normalized)
+    if cached:
+        return cached
+
+    keyword_suggestions: List[str] = []
+    tokens = _tokenize_text(normalized)
+    if bm25_helper and tokens:
         candidate_terms = bm25_helper.top_terms(tokens, top_docs=BM25_TOP_DOCS, top_terms=BM25_TOP_TERMS)
-        expanded_terms.extend(_filter_candidate_terms_by_pos(candidate_terms))
+        filtered_terms = _filter_candidate_terms_by_pos(candidate_terms)
+        keyword_suggestions.extend(filtered_terms)
+        for term in filtered_terms:
+            keyword_suggestions.extend(_lookup_japanese_synonyms(term))
 
-    synonym_terms: List[str] = []
-    for term in expanded_terms:
-        synonym_terms.extend(_lookup_japanese_synonyms(term))
-    if synonym_terms:
-        expanded_terms.extend(synonym_terms)
+    # 重複を除去し、空白のみの語を削除
+    deduped_suggestions: List[str] = []
+    seen_terms: Set[str] = set()
+    for term in keyword_suggestions:
+        cleaned = term.strip()
+        if not cleaned or cleaned in seen_terms:
+            continue
+        seen_terms.add(cleaned)
+        deduped_suggestions.append(cleaned)
 
-    additional = [term for term in expanded_terms if term and term not in tokens]
-    if not additional:
-        return question
+    prompt_lines = [
+        "以下のユーザー質問を、検索の成功率が高くなるように自然な日本語で1文に書き換えてください。",
+        "質問の意図や対象は絶対に変えず、不要な説明や出力形式の指示は付けないでください。",
+        "検索に役立つキーワードがあれば自然な形で含めてください。",
+    ]
+    if deduped_suggestions:
+        prompt_lines.append("参考になりそうなキーワード候補: " + ", ".join(deduped_suggestions[:BM25_TOP_TERMS]))
+    prompt_lines.append(f"ユーザー質問: {normalized}")
+    prompt_lines.append("書き換え後の質問:")
 
-    expanded_query = question + " " + " ".join(dict.fromkeys(additional))
-    logging.debug("Expanded query: %s -> %s", question, expanded_query)
-    return expanded_query
+    prompt = "\n".join(prompt_lines)
+
+    start = time.perf_counter()
+    try:
+        raw_response = llm.invoke(prompt)
+        if isinstance(raw_response, str):
+            response_text = raw_response
+        else:
+            response_text = getattr(raw_response, "content", "") or str(raw_response)
+        if not isinstance(response_text, str):
+            response_text = str(response_text)
+        # 先頭の非空行を採用
+        rewritten_candidates = [line.strip() for line in response_text.splitlines() if line.strip()]
+        rewritten_query = rewritten_candidates[0] if rewritten_candidates else normalized
+
+        latency = time.perf_counter() - start
+        token_estimate = None
+        usage = getattr(raw_response, "response_metadata", None)
+        if isinstance(usage, dict):
+            token_estimate = usage.get("token_count") or usage.get("total_tokens")
+        cost_monitor.record(len(prompt), len(response_text), latency, token_estimate)
+
+        _QUERY_REWRITE_CACHE[normalized] = rewritten_query
+        logging.debug("Rewritten query: %s -> %s", question, rewritten_query)
+        return rewritten_query
+    except Exception:
+        latency = time.perf_counter() - start
+        cost_monitor.record(len(prompt), 0, latency, None)
+        logging.exception("Gemini によるクエリ書き換えに失敗しました。")
+        _QUERY_REWRITE_CACHE[normalized] = normalized
+        return normalized
 
 # ── インデックス設定 ──
 INDEX_DB_DIR = "./constitution_vector_db"
@@ -808,7 +861,7 @@ def get_answer(question: str):
 
     nodes_for_answer = reranked_nodes[:SYNTHESIS_TOP_K] if reranked_nodes else []
     if not nodes_for_answer:
-        nodes_for_answer = _retrieve_nodes_for_query(_expand_query(question, bm25_helper))
+        nodes_for_answer = _retrieve_nodes_for_query(_rewrite_query(question, bm25_helper))
 
     response = RESPONSE_SYNTHESIZER.synthesize(question, nodes_for_answer)
     answer_text = getattr(response, "response", str(response))

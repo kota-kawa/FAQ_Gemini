@@ -32,26 +32,12 @@ CHUNK_SIZE = 1000
 CHUNK_OVERLAP = 200  # チャンク間の重複数
 
 
-def split_text(text: str, chunk_size: int = CHUNK_SIZE, chunk_overlap: int = CHUNK_OVERLAP) -> list[str]:
-    """与えられたテキストを固定長チャンクに分割するシンプルな実装"""
-    chunks = []
-    start = 0
-    length = len(text)
-    while start < length:
-        end = min(length, start + chunk_size)
-        chunks.append(text[start:end])
-        if end == length:
-            break
-        start = end - chunk_overlap
-    return chunks
-
-
 def process_jsonl(jsonl_path: str) -> list[Document]:
     """
-    .jsonl を読み込み、レコードごとにテキストをチャンクに分割して
-    Document オブジェクトのリストを生成する。
+    .jsonl を読み込み、レコードごとに Document を生成する。
     JSONL は { 'question': ..., 'answer': ... } または 'text' フィールドを想定。
-    各 Document には、元ファイル名と行番号がメタデータとして付与される。
+    質問と回答のペアは 1 レコード = 1 ドキュメントとして格納し、
+    元ファイル名と行番号などのメタデータを付与する。
     """
     documents = []
     try:
@@ -71,8 +57,11 @@ def process_jsonl(jsonl_path: str) -> list[Document]:
                     'source': os.path.basename(jsonl_path),
                     'line': line_idx
                 }
-                for chunk in split_text(text):
-                    documents.append(Document(text=chunk, extra_info=metadata))
+
+                if 'question' in record:
+                    metadata['question'] = record['question']
+
+                documents.append(Document(text=text, extra_info=metadata))
         return documents
     except Exception as e:
         print(f"Error processing {jsonl_path}: {e}")
@@ -87,7 +76,7 @@ Settings.llm = llm
 prompt_helper = PromptHelper(4096, CHUNK_SIZE, CHUNK_OVERLAP / CHUNK_SIZE)
 
 # --- 変更点: 埋め込みモデルを Gemini Embedding に切替 -----------------------
-# 推奨: ドキュメント側は RETRIEVAL_DOCUMENT を指定（検索クエリ側は RETRIEVAL_QUERY）
+# 推奨: インデクシング / 検索の双方で RETRIEVAL_DOCUMENT を指定する。
 # 出力次元は 768/1536/3072 が推奨。ここではコスト/精度バランスで 768 を採用。
 # モデル名は Gemini API の安定版 "gemini-embedding-001" を使用。
 # ※ LlamaIndex の GoogleGenAIEmbedding は GOOGLE_API_KEY を自動検出します。
