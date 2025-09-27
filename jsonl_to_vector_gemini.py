@@ -5,12 +5,21 @@ from dotenv import load_dotenv
 
 # LlamaIndex の主要モジュール
 from llama_index.core import Document, Settings, PromptHelper
-from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 
-# 修正：GoogleGenAI -> GoogleGenerativeAI に変更
+# --- 変更点: 埋め込みを Gemini Embedding に切替 ----------------------------
+# 旧: from llama_index.embeddings.huggingface import HuggingFaceEmbedding
+# 新: Google GenAI Embedding ラッパーを使用（Gemini API / Vertex AI 両対応）
+from llama_index.embeddings.google_genai import GoogleGenAIEmbedding
+# タスク種別や出力次元などの設定用（Gemini API 純正 SDK）
+from google.genai import types
+# ----------------------------------------------------------------------
+
+# Gemini の LLM（生成）側は従来通り langchain-google-genai を使用
 from langchain_google_genai import GoogleGenerativeAI
 
 # .env ファイルから環境変数を読み込み（必要なら）
+# ※ GOOGLE_API_KEY（Gemini API キー）を .env に設定してください
+#    例: GOOGLE_API_KEY=AIzaSy...
 load_dotenv()
 
 # JSONL ファイルが配置されるディレクトリと、インデックスの永続化先ディレクトリ
@@ -21,6 +30,7 @@ os.makedirs(INDEX_DB_DIR, exist_ok=True)
 # テキスト分割用パラメータ
 CHUNK_SIZE = 1000
 CHUNK_OVERLAP = 200  # チャンク間の重複数
+
 
 def split_text(text: str, chunk_size: int = CHUNK_SIZE, chunk_overlap: int = CHUNK_OVERLAP) -> list[str]:
     """与えられたテキストを固定長チャンクに分割するシンプルな実装"""
@@ -68,18 +78,29 @@ def process_jsonl(jsonl_path: str) -> list[Document]:
         print(f"Error processing {jsonl_path}: {e}")
         return []
 
-# LLM のインスタンスを生成し、Settings に設定
+
+# LLM のインスタンスを生成し、Settings に設定（生成モデルは既存のまま）
 llm = GoogleGenerativeAI(model='gemini-2.5-flash')
 Settings.llm = llm
 
 # PromptHelper の初期化（max_tokens, chunk_size, chunk_overlap_ratio）
 prompt_helper = PromptHelper(4096, CHUNK_SIZE, CHUNK_OVERLAP / CHUNK_SIZE)
 
-# 埋め込みモデルを設定
-embed_model = HuggingFaceEmbedding(model_name='intfloat/multilingual-e5-large')
-#embed_model = HuggingFaceEmbedding(model_name='cl-nagoya/ruri-v3-310m')
-
+# --- 変更点: 埋め込みモデルを Gemini Embedding に切替 -----------------------
+# 推奨: ドキュメント側は RETRIEVAL_DOCUMENT を指定（検索クエリ側は RETRIEVAL_QUERY）
+# 出力次元は 768/1536/3072 が推奨。ここではコスト/精度バランスで 768 を採用。
+# モデル名は Gemini API の安定版 "gemini-embedding-001" を使用。
+# ※ LlamaIndex の GoogleGenAIEmbedding は GOOGLE_API_KEY を自動検出します。
+embed_model = GoogleGenAIEmbedding(
+    model_name="gemini-embedding-001",
+    embedding_config=types.EmbedContentConfig(
+        task_type="RETRIEVAL_DOCUMENT",
+        output_dimensionality=768
+    ),
+)
 Settings.embed_model = embed_model
+# ----------------------------------------------------------------------
+
 
 def create_vector_indices():
     """
@@ -115,6 +136,7 @@ def create_vector_indices():
         os.makedirs(persist_dir, exist_ok=True)
         index.storage_context.persist(persist_dir)
         print(f"Index saved for {name} to {persist_dir}")
+
 
 if __name__ == '__main__':
     create_vector_indices()

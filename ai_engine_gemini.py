@@ -12,12 +12,18 @@ from llama_index.core import (
     PromptHelper,
 )
 from llama_index.core.settings import Settings
-from llama_index.embeddings.huggingface import HuggingFaceEmbedding
+
+# ── 変更点: 埋め込みを HuggingFace(E5) → Google Gemini Embedding に切替 ──
+# 旧: from llama_index.embeddings.huggingface import HuggingFaceEmbedding
+from llama_index.embeddings.google_genai import GoogleGenAIEmbedding
+from google.genai import types  # task_type や次元数などの指定用
+
+# LLM は Gemini（LangChain 経由）を継続使用
 from langchain_google_genai import GoogleGenerativeAI
 
 # ── 環境変数 ──
 load_dotenv()
-os.environ["GOOGLE_API_KEY"] = os.getenv("GOOGLE_API_KEY")
+os.environ["GOOGLE_API_KEY"] = os.getenv("GOOGLE_API_KEY") or ""
 logging.basicConfig(level=logging.DEBUG)
 
 # ── チャンク設定（FAQ 例を想定） ──
@@ -31,9 +37,17 @@ prompt_helper = PromptHelper(
 )
 
 # ── LLM / 埋め込みモデル設定 ──
-llm = GoogleGenerativeAI(model="gemini-2.0-flash")
-embed_model = HuggingFaceEmbedding(model_name="intfloat/multilingual-e5-large")
-#embed_model = HuggingFaceEmbedding(model_name='cl-nagoya/ruri-v3-310m')
+# ※ インデクシング側（jsonl_to_vector.py）は RETRIEVAL_DOCUMENT を使用。
+#    本ファイル（検索側）はクエリ埋め込みなので RETRIEVAL_QUERY を使用し、次元数も一致(768)させる。
+llm = GoogleGenerativeAI(model="gemini-2.5-flash")
+
+embed_model = GoogleGenAIEmbedding(
+    model_name="gemini-embedding-001",
+    embedding_config=types.EmbedContentConfig(
+        task_type="RETRIEVAL_QUERY",
+        output_dimensionality=768
+    ),
+)
 
 Settings.llm = llm
 Settings.embed_model = embed_model
@@ -43,15 +57,18 @@ Settings.prompt_helper = prompt_helper
 INDEX_DB_DIR = "./constitution_vector_db"
 HISTORY_FILE = "conversation_history.json"
 
+
 def load_all_indices():
-    """./static/vector_db_llamaindex 以下を走査し、
+    """./constitution_vector_db 以下を走査し、
     サブディレクトリごとの VectorStoreIndex をロードして返す"""
     if not os.path.exists(INDEX_DB_DIR):
         raise RuntimeError(f"Directory not found: {INDEX_DB_DIR}")
+
     subdirs = [
         d for d in os.listdir(INDEX_DB_DIR)
         if os.path.isdir(os.path.join(INDEX_DB_DIR, d))
     ]
+
     indices, summaries = [], []
     for subdir in subdirs:
         persist = os.path.join(INDEX_DB_DIR, subdir, "persist")
@@ -62,9 +79,11 @@ def load_all_indices():
         idx = load_index_from_storage(ctx)
         indices.append(idx)
         summaries.append(f"ファイル: {subdir}")
+
     if not indices:
         raise RuntimeError("Failed to load any index.")
     return indices, summaries
+
 
 # 一度だけロード
 try:
@@ -83,6 +102,7 @@ except Exception:
     graph_or_index = None
     NUM_INDICES = 0
 
+
 # ── 会話履歴ユーティリティ ──
 def load_conversation_history():
     if os.path.exists(HISTORY_FILE):
@@ -93,12 +113,14 @@ def load_conversation_history():
             logging.exception(f"履歴の読み込みエラー: {e}")
     return []
 
+
 def save_conversation_history(hist):
     try:
         with open(HISTORY_FILE, "w", encoding="utf-8") as f:
             json.dump({"conversation_history": hist}, f, ensure_ascii=False, indent=4)
     except Exception as e:
         logging.exception(f"履歴の保存エラー: {e}")
+
 
 # ── プロンプト ──
 COMBINE_PROMPT = """あなたは、資料を基にユーザーの問いに対してサポートするためのアシスタントです。
@@ -129,24 +151,25 @@ COMBINE_PROMPT = """あなたは、資料を基にユーザーの問いに対し
         そちらをご確認いただくか、直接メーカーにお問い合わせいただくことをお勧めします。
 """
 
+
 # ── 公開 API ──
 def get_answer(question: str):
     """質問文字列を受け取り、RAG 結果（answer, sources）を返す"""
     if graph_or_index is None:
         raise RuntimeError("インデックスが初期化されていません。")
+
     question = question.strip()
     if not question:
         raise ValueError("質問を入力してください。")
 
-    # 会話履歴に保存（ただし検索クエリには使わない）
+    # 会話履歴に保存（ただし検索クエリ自体は履歴を結合せず、生の質問を用いる）
     history = load_conversation_history()
     history.append({"role": "User", "message": question})
 
-    # ── ここを変更 ──
-    # 元: query_text = "\n".join(f"{e['role']}: {e['message']}" for e in history)
+    # クエリテキスト（ここでは生の質問を用いる）
     query_text = question
-    # ──────────────────
 
+    # クエリエンジン生成（各サブインデックスを横断）
     query_engine = graph_or_index.as_query_engine(
         prompt_template=COMBINE_PROMPT,
         graph_query_kwargs={"top_k": NUM_INDICES},
@@ -156,16 +179,19 @@ def get_answer(question: str):
         },
         response_mode="tree_summarize",
     )
+
+    # 実行
     response = query_engine.query(query_text)
     answer = response.response
 
-    # 上位 2 ファイル抽出
-    nodes = getattr(response, "source_nodes", [])
+    # 参照上位 3 ファイル抽出
+    nodes = getattr(response, "source_nodes", []) or []
     sorted_nodes = sorted(nodes, key=lambda n: getattr(n, "score", 0), reverse=True)
+
     top_srcs = []
     for n in sorted_nodes:
         meta = getattr(n, "extra_info", {}) or {}
-        src = meta.get("source") or n.metadata.get("source")
+        src = meta.get("source") or getattr(n, "metadata", {}).get("source")
         if src and src != "不明ファイル" and src not in top_srcs:
             top_srcs.append(src)
         if len(top_srcs) == 3:
@@ -174,9 +200,9 @@ def get_answer(question: str):
     ref_dict = {s: set() for s in top_srcs}
     for n in nodes:
         meta = getattr(n, "extra_info", {}) or {}
-        s = meta.get("source") or n.metadata.get("source")
+        s = meta.get("source") or getattr(n, "metadata", {}).get("source")
         if s in ref_dict:
-            pg = meta.get("page") or n.metadata.get("page") or "不明"
+            pg = meta.get("page") or getattr(n, "metadata", {}).get("page") or "不明"
             ref_dict[s].add(str(pg))
 
     if ref_dict:
@@ -190,7 +216,9 @@ def get_answer(question: str):
     # 履歴保存
     history.append({"role": "AI", "message": final})
     save_conversation_history(history)
+
     return final, list(ref_dict.keys())
+
 
 def reset_history():
     """conversation_history.json を空にする"""

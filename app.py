@@ -4,8 +4,8 @@ import os
 import logging
 from dotenv import load_dotenv
 
-import ai_engine  # AI/RAG ロジックをまとめた別モジュール
-#import ai_engine_cot as ai_engine
+#import ai_engine  # AI/RAG ロジックをまとめた別モジュール
+import ai_engine_gemini as ai_engine
 
 # ── 環境変数 / Flask 初期化 ──
 load_dotenv()
