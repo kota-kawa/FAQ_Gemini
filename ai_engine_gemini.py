@@ -9,7 +9,7 @@ import time
 from collections import Counter, defaultdict
 from dataclasses import dataclass, asdict
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 from dotenv import load_dotenv
 
 # llama_index 関連
@@ -119,6 +119,7 @@ DEFAULT_CHILD_QUERY_KWARGS: Dict[str, Optional[int]] = {
 }
 BM25_TOP_DOCS = 6
 BM25_TOP_TERMS = 15
+BM25_SCORE_WEIGHT = 0.4
 RRF_K = 60
 RRF_TOP_N = 12
 RERANK_TOP_N = 8
@@ -368,7 +369,7 @@ class SimpleBM25:
         scores = [self._score(query_tokens, idx) for idx in range(len(self._tokenized_docs))]
         ranked_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:top_n]
         return [
-            (self._documents[i], scores[i], self._tokenized_docs[i])
+            (self._documents[i], scores[i], self._tokenized_docs[i], i)
             for i in ranked_indices
             if scores[i] > 0
         ]
@@ -379,7 +380,7 @@ class SimpleBM25:
             return []
         term_counter: Counter[str] = Counter()
         query_set = set(query_tokens)
-        for _, _, tokens in ranked_docs:
+        for _, _, tokens, _ in ranked_docs:
             for token in tokens:
                 if len(token) <= 1 or token in query_set:
                     continue
@@ -387,8 +388,12 @@ class SimpleBM25:
         return [term for term, _ in term_counter.most_common(top_terms)]
 
 
+BM25_DOC_ENTRIES: List[Dict[str, Any]] = []
+
+
 def _collect_corpus_texts(source_indices: Sequence) -> List[str]:
     corpus: List[str] = []
+    entries: List[Dict[str, Any]] = []
     for idx in source_indices:
         candidates: Iterable = []
         try:
@@ -414,6 +419,18 @@ def _collect_corpus_texts(source_indices: Sequence) -> List[str]:
                     text = None
             if text:
                 corpus.append(text)
+                metadata = getattr(node, "metadata", {}) or getattr(node, "extra_info", {}) or {}
+                source = metadata.get("source") or metadata.get("file")
+                line = metadata.get("line") or metadata.get("line_number") or metadata.get("start_line")
+                entries.append(
+                    {
+                        "node": node,
+                        "source": source,
+                        "line": str(line) if line is not None else None,
+                    }
+                )
+    global BM25_DOC_ENTRIES
+    BM25_DOC_ENTRIES = entries
     return corpus
 
 
@@ -491,6 +508,83 @@ def reciprocal_rank_fusion(result_sets: Sequence[Sequence[NodeWithScore]], top_n
     return fused_nodes
 
 
+def _ensure_node_with_score(node_like: Any) -> NodeWithScore:
+    if isinstance(node_like, NodeWithScore):
+        return node_like
+    base_node = getattr(node_like, "node", None) or node_like
+    score = getattr(node_like, "score", None)
+    return NodeWithScore(node=base_node, score=score)
+
+
+def _get_node_identifier(node_like: Any) -> str:
+    base_node = getattr(node_like, "node", None) or node_like
+    node_id = getattr(base_node, "node_id", None) or getattr(base_node, "id_", None)
+    if node_id:
+        return str(node_id)
+    metadata = getattr(base_node, "metadata", {}) or getattr(base_node, "extra_info", {}) or {}
+    source = metadata.get("source") or metadata.get("file")
+    line = metadata.get("line") or metadata.get("line_number") or metadata.get("start_line")
+    if source or line:
+        return f"{source or ''}:{line or ''}"
+    return str(id(base_node))
+
+
+def _build_bm25_nodes(query_text: str) -> List[NodeWithScore]:
+    if bm25_helper is None or not BM25_DOC_ENTRIES:
+        return []
+    tokens = _tokenize_text(query_text)
+    if not tokens:
+        return []
+
+    ranked_docs = bm25_helper.top_documents(tokens, top_n=BM25_TOP_DOCS)
+    if not ranked_docs:
+        return []
+
+    max_score = max((score for _, score, _, _ in ranked_docs), default=0.0)
+    if max_score <= 0:
+        return []
+
+    bm25_nodes: List[NodeWithScore] = []
+    seen_ids: Set[str] = set()
+    for _, raw_score, _, doc_index in ranked_docs:
+        if doc_index is None or doc_index < 0 or doc_index >= len(BM25_DOC_ENTRIES):
+            continue
+        entry = BM25_DOC_ENTRIES[doc_index]
+        node_obj = entry.get("node")
+        if node_obj is None:
+            continue
+        identifier = _get_node_identifier(node_obj)
+        if identifier in seen_ids:
+            continue
+        seen_ids.add(identifier)
+        normalized_score = (raw_score / max_score) * BM25_SCORE_WEIGHT
+        bm25_nodes.append(NodeWithScore(node=node_obj, score=normalized_score))
+    return sorted(bm25_nodes, key=lambda n: n.score or 0.0, reverse=True)
+
+
+def _merge_node_results(primary_nodes: Sequence[Any], additional_nodes: Sequence[NodeWithScore]) -> List[NodeWithScore]:
+    combined: List[NodeWithScore] = []
+    seen_ids: Set[str] = set()
+
+    for node in primary_nodes:
+        wrapped = _ensure_node_with_score(node)
+        identifier = _get_node_identifier(wrapped)
+        if identifier in seen_ids:
+            continue
+        seen_ids.add(identifier)
+        combined.append(wrapped)
+
+    for node in additional_nodes:
+        wrapped = _ensure_node_with_score(node)
+        identifier = _get_node_identifier(wrapped)
+        if identifier in seen_ids:
+            continue
+        seen_ids.add(identifier)
+        combined.append(wrapped)
+
+    return combined
+
+
 def _apply_reranker(nodes: Sequence[NodeWithScore], query: str) -> List[NodeWithScore]:
     if not nodes:
         return []
@@ -531,9 +625,11 @@ def _collect_results_for_queries(queries: Sequence[str]) -> List[List[NodeWithSc
     results: List[List[NodeWithScore]] = []
     for query in queries:
         expanded = _rewrite_query(query, bm25_helper)
-        nodes = _retrieve_nodes_for_query(expanded)
-        if nodes:
-            results.append(nodes)
+        vector_nodes = list(_retrieve_nodes_for_query(expanded) or [])
+        bm25_nodes = _build_bm25_nodes(expanded)
+        combined_nodes = _merge_node_results(vector_nodes, bm25_nodes)
+        if combined_nodes:
+            results.append(combined_nodes)
     return results
 
 
@@ -546,10 +642,13 @@ def retrieve_reranked_nodes(question: str, use_llm_expansion: bool = True) -> Tu
     if result_sets:
         fused_nodes = reciprocal_rank_fusion(result_sets)
     else:
-        fallback_nodes = _retrieve_nodes_for_query(_rewrite_query(question, bm25_helper))
+        rewritten = _rewrite_query(question, bm25_helper)
+        fallback_vector_nodes = list(_retrieve_nodes_for_query(rewritten) or [])
+        fallback_bm25_nodes = _build_bm25_nodes(rewritten)
+        merged_fallback = _merge_node_results(fallback_vector_nodes, fallback_bm25_nodes)
         fused_nodes = [
             NodeWithScore(node=getattr(node, "node", node), score=getattr(node, "score", None))
-            for node in fallback_nodes
+            for node in merged_fallback
         ]
 
     reranked_nodes = _apply_reranker(fused_nodes, question)
