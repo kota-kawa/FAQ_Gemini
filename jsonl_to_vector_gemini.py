@@ -1,12 +1,24 @@
 import os
 import glob
 import json
-from typing import Any, Dict, List
+from typing import List
+
+from langchain_core.documents import Document
+from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_community.vectorstores import FAISS
 
 # JSONL ファイルが配置されるディレクトリと、インデックスの永続化先ディレクトリ
 JSONL_DIR = "./docx_to_qa/jsonl"
 INDEX_DB_DIR = "./constitution_vector_db"
 os.makedirs(INDEX_DB_DIR, exist_ok=True)
+
+EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "intfloat/multilingual-e5-large")
+EMBEDDING_DEVICE = os.getenv("EMBEDDING_DEVICE", "cpu")
+
+embeddings = HuggingFaceEmbeddings(
+    model_name=EMBEDDING_MODEL_NAME,
+    model_kwargs={"device": EMBEDDING_DEVICE},
+)
 
 # テキスト分割用パラメータ
 CHUNK_SIZE = 1000
@@ -27,9 +39,9 @@ def split_text(text: str, chunk_size: int = CHUNK_SIZE, chunk_overlap: int = CHU
     return chunks
 
 
-def process_jsonl(jsonl_path: str) -> List[Dict[str, Any]]:
-    """JSONL を読み込み、BM25 用のプレーンなチャンク配列に変換する。"""
-    documents: List[Dict[str, Any]] = []
+def process_jsonl(jsonl_path: str) -> List[Document]:
+    """JSONL を読み込み、FAISS 用の Document 配列に変換する。"""
+    documents: List[Document] = []
     try:
         with open(jsonl_path, 'r', encoding='utf-8') as f:
             for line_idx, line in enumerate(f, start=1):
@@ -50,21 +62,23 @@ def process_jsonl(jsonl_path: str) -> List[Dict[str, Any]]:
                 }
 
                 for chunk_id, chunk in enumerate(split_text(text), start=1):
-                    documents.append({
-                        'text': chunk,
-                        'metadata': {
-                            **metadata,
-                            'chunk_id': chunk_id,
-                        },
-                    })
+                    documents.append(
+                        Document(
+                            page_content=chunk,
+                            metadata={
+                                **metadata,
+                                'chunk_id': chunk_id,
+                            },
+                        )
+                    )
         return documents
     except Exception as e:
         print(f"Error processing {jsonl_path}: {e}")
         return []
 
 
-def create_bm25_corpora():
-    """JSONL ファイルを BM25 用のコーパス JSON に変換して保存する。"""
+def create_faiss_indices():
+    """JSONL ファイルから FAISS ベクトルストアを生成し保存する。"""
     jsonl_files = glob.glob(os.path.join(JSONL_DIR, '*.jsonl'))
     if not jsonl_files:
         raise FileNotFoundError(f"No JSONL files found in {JSONL_DIR}")
@@ -81,16 +95,24 @@ def create_bm25_corpora():
 
         persist_dir = os.path.join(subdir, 'persist')
         os.makedirs(persist_dir, exist_ok=True)
-        output_path = os.path.join(persist_dir, 'bm25_index.json')
-        payload = {
-            'documents': docs,
-            'chunk_size': CHUNK_SIZE,
-            'chunk_overlap': CHUNK_OVERLAP,
-        }
-        with open(output_path, 'w', encoding='utf-8') as f:
-            json.dump(payload, f, ensure_ascii=False, indent=2)
-        print(f"BM25 corpus saved for {name} to {output_path}")
+        vector_store = FAISS.from_documents(docs, embeddings)
+        vector_store.save_local(persist_dir)
+
+        metadata_path = os.path.join(persist_dir, 'settings.json')
+        with open(metadata_path, 'w', encoding='utf-8') as f:
+            json.dump(
+                {
+                    'chunk_size': CHUNK_SIZE,
+                    'chunk_overlap': CHUNK_OVERLAP,
+                    'embedding_model': EMBEDDING_MODEL_NAME,
+                },
+                f,
+                ensure_ascii=False,
+                indent=2,
+            )
+
+        print(f"FAISS index saved for {name} to {persist_dir}")
 
 
 if __name__ == '__main__':
-    create_bm25_corpora()
+    create_faiss_indices()

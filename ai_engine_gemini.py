@@ -1,11 +1,11 @@
 import os
 import json
 import logging
-from typing import List
+from typing import List, Optional
 from dotenv import load_dotenv
 
-from langchain_core.documents import Document
-from langchain_community.retrievers import BM25Retriever
+from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_community.vectorstores import FAISS
 from langchain_google_genai import GoogleGenerativeAI
 
 # ── 環境変数 ──
@@ -18,10 +18,17 @@ llm = GoogleGenerativeAI(model="gemini-2.5-flash")
 # ── インデックス設定 ──
 INDEX_DB_DIR = "./constitution_vector_db"
 HISTORY_FILE = "conversation_history.json"
+EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "intfloat/multilingual-e5-large")
+EMBEDDING_DEVICE = os.getenv("EMBEDDING_DEVICE", "cpu")
+
+embeddings = HuggingFaceEmbeddings(
+    model_name=EMBEDDING_MODEL_NAME,
+    model_kwargs={"device": EMBEDDING_DEVICE},
+)
 
 
 def load_all_indices():
-    """./constitution_vector_db 以下を走査し、BM25 用のコーパスを読み込む"""
+    """./constitution_vector_db 以下を走査し、FAISS のインデックスを読み込む"""
     if not os.path.exists(INDEX_DB_DIR):
         raise RuntimeError(f"Directory not found: {INDEX_DB_DIR}")
 
@@ -30,46 +37,41 @@ def load_all_indices():
         if os.path.isdir(os.path.join(INDEX_DB_DIR, d))
     ]
 
-    all_documents: List[Document] = []
+    combined_store: Optional[FAISS] = None
     for subdir in subdirs:
         persist = os.path.join(INDEX_DB_DIR, subdir, "persist")
-        index_path = os.path.join(persist, "bm25_index.json")
+        index_path = os.path.join(persist, "index.faiss")
         if not os.path.exists(index_path):
-            logging.warning(f"BM25 index not found in {subdir}, skipping...")
+            logging.warning(f"FAISS index not found in {subdir}, skipping...")
             continue
 
         try:
-            with open(index_path, "r", encoding="utf-8") as f:
-                payload = json.load(f)
+            store = FAISS.load_local(
+                persist,
+                embeddings,
+                allow_dangerous_deserialization=True,
+            )
         except Exception:
-            logging.exception(f"Failed to read BM25 index: {index_path}")
+            logging.exception(f"Failed to load FAISS index from {persist}")
             continue
 
-        docs_data = payload.get("documents") if isinstance(payload, dict) else None
-        if docs_data is None:
-            logging.warning(f"Invalid BM25 index format: {index_path}")
-            continue
+        if combined_store is None:
+            combined_store = store
+        else:
+            combined_store.merge_from(store)
 
-        for entry in docs_data:
-            text = entry.get("text", "")
-            if not text:
-                continue
-            metadata = entry.get("metadata", {}) or {}
-            metadata.setdefault("source", metadata.get("source") or f"{subdir}.jsonl")
-            all_documents.append(Document(page_content=text, metadata=metadata))
+    if combined_store is None:
+        raise RuntimeError("Failed to load any FAISS indices.")
 
-    if not all_documents:
-        raise RuntimeError("Failed to load any BM25 corpora.")
-
-    return all_documents
+    return combined_store
 
 
 try:
-    ALL_DOCUMENTS = load_all_indices()
-    bm25_retriever = BM25Retriever.from_documents(ALL_DOCUMENTS, k=5)
+    VECTOR_STORE = load_all_indices()
+    vector_retriever = VECTOR_STORE.as_retriever(search_kwargs={"k": 5})
 except Exception:
-    logging.exception("BM25 インデックスの初期化に失敗しました。")
-    bm25_retriever = None
+    logging.exception("FAISS インデックスの初期化に失敗しました。")
+    vector_retriever = None
 
 
 # ── 会話履歴ユーティリティ ──
@@ -123,8 +125,8 @@ def _format_history_for_prompt(history: List[dict]) -> str:
 
 def get_answer(question: str):
     """質問文字列を受け取り、RAG 結果（answer, sources）を返す"""
-    if bm25_retriever is None:
-        raise RuntimeError("BM25 インデックスが初期化されていません。")
+    if vector_retriever is None:
+        raise RuntimeError("FAISS インデックスが初期化されていません。")
 
     question = question.strip()
     if not question:
@@ -133,7 +135,7 @@ def get_answer(question: str):
     history = load_conversation_history()
     history.append({"role": "User", "message": question})
 
-    retrieved_docs = bm25_retriever.get_relevant_documents(question)
+    retrieved_docs = vector_retriever.get_relevant_documents(question)
 
     context_blocks = []
     top_srcs = []
