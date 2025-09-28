@@ -1,24 +1,11 @@
 import os
 import json
 import logging
+from typing import List
 from dotenv import load_dotenv
 
-# llama_index 関連
-from llama_index.core import (
-    ComposableGraph,
-    VectorStoreIndex,
-    load_index_from_storage,
-    StorageContext,
-    PromptHelper,
-)
-from llama_index.core.settings import Settings
-
-# ── 変更点: 埋め込みを HuggingFace(E5) → Google Gemini Embedding に切替 ──
-# 旧: from llama_index.embeddings.huggingface import HuggingFaceEmbedding
-from llama_index.embeddings.google_genai import GoogleGenAIEmbedding
-from google.genai import types  # task_type や次元数などの指定用
-
-# LLM は Gemini（LangChain 経由）を継続使用
+from langchain_core.documents import Document
+from langchain_community.retrievers import BM25Retriever
 from langchain_google_genai import GoogleGenerativeAI
 
 # ── 環境変数 ──
@@ -26,32 +13,7 @@ load_dotenv()
 os.environ["GOOGLE_API_KEY"] = os.getenv("GOOGLE_API_KEY") or ""
 logging.basicConfig(level=logging.DEBUG)
 
-# ── チャンク設定（FAQ 例を想定） ──
-CHUNK_SIZE = 1000
-CHUNK_OVERLAP = 200
-
-prompt_helper = PromptHelper(
-    context_window=4096,                # ← max_input_size の代替
-    num_output=CHUNK_SIZE,
-    chunk_overlap_ratio=CHUNK_OVERLAP / CHUNK_SIZE,
-)
-
-# ── LLM / 埋め込みモデル設定 ──
-# ※ インデクシング側（jsonl_to_vector.py）は RETRIEVAL_DOCUMENT を使用。
-#    本ファイル（検索側）はクエリ埋め込みなので RETRIEVAL_QUERY を使用し、次元数も一致(768)させる。
 llm = GoogleGenerativeAI(model="gemini-2.5-flash")
-
-embed_model = GoogleGenAIEmbedding(
-    model_name="gemini-embedding-001",
-    embedding_config=types.EmbedContentConfig(
-        task_type="RETRIEVAL_QUERY",
-        output_dimensionality=768
-    ),
-)
-
-Settings.llm = llm
-Settings.embed_model = embed_model
-Settings.prompt_helper = prompt_helper
 
 # ── インデックス設定 ──
 INDEX_DB_DIR = "./constitution_vector_db"
@@ -59,8 +21,7 @@ HISTORY_FILE = "conversation_history.json"
 
 
 def load_all_indices():
-    """./constitution_vector_db 以下を走査し、
-    サブディレクトリごとの VectorStoreIndex をロードして返す"""
+    """./constitution_vector_db 以下を走査し、BM25 用のコーパスを読み込む"""
     if not os.path.exists(INDEX_DB_DIR):
         raise RuntimeError(f"Directory not found: {INDEX_DB_DIR}")
 
@@ -69,38 +30,46 @@ def load_all_indices():
         if os.path.isdir(os.path.join(INDEX_DB_DIR, d))
     ]
 
-    indices, summaries = [], []
+    all_documents: List[Document] = []
     for subdir in subdirs:
         persist = os.path.join(INDEX_DB_DIR, subdir, "persist")
-        if not os.path.exists(persist):
-            logging.warning(f"Persist directory not found in {subdir}, skipping...")
+        index_path = os.path.join(persist, "bm25_index.json")
+        if not os.path.exists(index_path):
+            logging.warning(f"BM25 index not found in {subdir}, skipping...")
             continue
-        ctx = StorageContext.from_defaults(persist_dir=persist)
-        idx = load_index_from_storage(ctx)
-        indices.append(idx)
-        summaries.append(f"ファイル: {subdir}")
 
-    if not indices:
-        raise RuntimeError("Failed to load any index.")
-    return indices, summaries
+        try:
+            with open(index_path, "r", encoding="utf-8") as f:
+                payload = json.load(f)
+        except Exception:
+            logging.exception(f"Failed to read BM25 index: {index_path}")
+            continue
+
+        docs_data = payload.get("documents") if isinstance(payload, dict) else None
+        if docs_data is None:
+            logging.warning(f"Invalid BM25 index format: {index_path}")
+            continue
+
+        for entry in docs_data:
+            text = entry.get("text", "")
+            if not text:
+                continue
+            metadata = entry.get("metadata", {}) or {}
+            metadata.setdefault("source", metadata.get("source") or f"{subdir}.jsonl")
+            all_documents.append(Document(page_content=text, metadata=metadata))
+
+    if not all_documents:
+        raise RuntimeError("Failed to load any BM25 corpora.")
+
+    return all_documents
 
 
-# 一度だけロード
 try:
-    indices, index_summaries = load_all_indices()
-    NUM_INDICES = len(indices)
-    if NUM_INDICES == 1:
-        graph_or_index = indices[0]
-    else:
-        graph_or_index = ComposableGraph.from_indices(
-            VectorStoreIndex,
-            indices,
-            index_summaries=index_summaries,
-        )
+    ALL_DOCUMENTS = load_all_indices()
+    bm25_retriever = BM25Retriever.from_documents(ALL_DOCUMENTS, k=5)
 except Exception:
-    logging.exception("Indexの初期化に失敗しました。")
-    graph_or_index = None
-    NUM_INDICES = 0
+    logging.exception("BM25 インデックスの初期化に失敗しました。")
+    bm25_retriever = None
 
 
 # ── 会話履歴ユーティリティ ──
@@ -125,85 +94,85 @@ def save_conversation_history(hist):
 # ── プロンプト ──
 COMBINE_PROMPT = """あなたは、資料を基にユーザーの問いに対してサポートするためのアシスタントです。
 
-以下の回答候補を統合して、最終的な回答を作成してください。  
-【回答候補】  
+【会話履歴】
+{history}
+
+【質問】
+{question}
+
+【回答候補】
 {summaries}
 
-【統合ルール】  
-- もし用意されたドキュメント内の情報が十分でない場合には、情報不足であることを明示し、その上であなたの知識で回答を生成してください。  
-- 可能な限り、既に行われた会話内容からも補足情報を取り入れて、有用な回答を提供してください。  
-- 各候補の根拠（参照ファイル情報）がある場合、その情報を保持してください。  
-- 重複する参照は１つにまとめてください。 
-- 回答が十分な情報を含むよう、可能な範囲で詳細に記述してください。  
+【統合ルール】
+- もし用意されたドキュメント内の情報が十分でない場合には、情報不足であることを明示し、その上であなたの知識で回答してください。
+- 可能な限り、会話履歴にある関連情報も反映させてください。
+- 各候補の根拠（参照ファイル情報）がある場合、その情報を保持してください。
+- 重複する参照は１つにまとめてください。
+- 回答が十分な情報を含むよう、可能な範囲で詳細に記述してください。
 - 重要！　必ず日本語で回答すること！
-
-【回答例】
-    【資料に答えがある場合】
-    (質問例-スイッチが入らない時にはどうすればいい？)
-    - そうですね、まずは電源ケーブルがしっかりと接続されているか確認してください。
-        次に、バッテリーが充電されているか確認してください。
-        もしそれでもスイッチが入らない場合は、取扱説明書のトラブルシューティングのページを参照するか、カスタマーサポートにご連絡ください。
-
-    【資料に答えがない場合】
-    (質問例-この製品の最新のファームウェアのリリース日はいつですか？)
-    - 最新のファームウェアのリリース日については、現在用意されている資料には記載がありません。
-        しかし、一般的には、製品のウェブサイトのサポートセクションや、メーカーからのメールマガジンなどで告知されることが多いです。
-        そちらをご確認いただくか、直接メーカーにお問い合わせいただくことをお勧めします。
 """
 
 
 # ── 公開 API ──
+def _format_history_for_prompt(history: List[dict]) -> str:
+    if not history:
+        return "（履歴なし）"
+    recent = history[-6:]
+    return "\n".join(f"{entry['role']}: {entry['message']}" for entry in recent)
+
+
 def get_answer(question: str):
     """質問文字列を受け取り、RAG 結果（answer, sources）を返す"""
-    if graph_or_index is None:
-        raise RuntimeError("インデックスが初期化されていません。")
+    if bm25_retriever is None:
+        raise RuntimeError("BM25 インデックスが初期化されていません。")
 
     question = question.strip()
     if not question:
         raise ValueError("質問を入力してください。")
 
-    # 会話履歴に保存（ただし検索クエリ自体は履歴を結合せず、生の質問を用いる）
     history = load_conversation_history()
     history.append({"role": "User", "message": question})
 
-    # クエリテキスト（ここでは生の質問を用いる）
-    query_text = question
+    retrieved_docs = bm25_retriever.get_relevant_documents(question)
 
-    # クエリエンジン生成（各サブインデックスを横断）
-    query_engine = graph_or_index.as_query_engine(
-        prompt_template=COMBINE_PROMPT,
-        graph_query_kwargs={"top_k": NUM_INDICES},
-        child_query_kwargs={
-            "similarity_top_k": 5,
-            "similarity_threshold": 0.2,
-        },
-        response_mode="tree_summarize",
+    context_blocks = []
+    top_srcs = []
+    for idx, doc in enumerate(retrieved_docs, start=1):
+        source = doc.metadata.get("source", "不明ファイル")
+        if source not in top_srcs:
+            top_srcs.append(source)
+        header_parts = [f"候補{idx}: 出典={source}"]
+        if doc.metadata.get("line") is not None:
+            header_parts.append(f"行={doc.metadata['line']}")
+        if doc.metadata.get("chunk_id") is not None:
+            header_parts.append(f"チャンク={doc.metadata['chunk_id']}")
+        header = " / ".join(header_parts)
+        context_blocks.append(f"{header}\n{doc.page_content.strip()}")
+
+    if context_blocks:
+        summaries_text = "\n\n".join(context_blocks)
+    else:
+        summaries_text = "該当資料は見つかりませんでした。資料が不足する場合はその旨を伝えつつ、一般的な知識で補足してください。"
+
+    prompt_text = COMBINE_PROMPT.format(
+        history=_format_history_for_prompt(history[:-1]),
+        question=question,
+        summaries=summaries_text,
     )
 
-    # 実行
-    response = query_engine.query(query_text)
-    answer = response.response
+    raw_answer = llm.invoke(prompt_text)
+    if isinstance(raw_answer, str):
+        answer = raw_answer
+    else:
+        answer = getattr(raw_answer, "content", None) or getattr(raw_answer, "text", None) or str(raw_answer)
 
-    # 参照上位 3 ファイル抽出
-    nodes = getattr(response, "source_nodes", []) or []
-    sorted_nodes = sorted(nodes, key=lambda n: getattr(n, "score", 0), reverse=True)
-
-    top_srcs = []
-    for n in sorted_nodes:
-        meta = getattr(n, "extra_info", {}) or {}
-        src = meta.get("source") or getattr(n, "metadata", {}).get("source")
-        if src and src != "不明ファイル" and src not in top_srcs:
-            top_srcs.append(src)
-        if len(top_srcs) == 3:
-            break
-
-    ref_dict = {s: set() for s in top_srcs}
-    for n in nodes:
-        meta = getattr(n, "extra_info", {}) or {}
-        s = meta.get("source") or getattr(n, "metadata", {}).get("source")
-        if s in ref_dict:
-            pg = meta.get("page") or getattr(n, "metadata", {}).get("page") or "不明"
-            ref_dict[s].add(str(pg))
+    ref_dict = {s: set() for s in top_srcs[:3] if s and s != "不明ファイル"}
+    for doc in retrieved_docs:
+        src = doc.metadata.get("source")
+        if src in ref_dict:
+            page = doc.metadata.get("page") or doc.metadata.get("line") or doc.metadata.get("chunk_id")
+            if page is not None:
+                ref_dict[src].add(str(page))
 
     if ref_dict:
         refs = ", ".join(
@@ -213,7 +182,6 @@ def get_answer(question: str):
     else:
         final = answer
 
-    # 履歴保存
     history.append({"role": "AI", "message": final})
     save_conversation_history(history)
 
