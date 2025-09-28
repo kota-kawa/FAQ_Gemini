@@ -17,3 +17,4 @@ llama-index-core==0.12.30
 llama-index-llms-langchain==0.6.1
 llama-index-embeddings-google-genai
 rank-bm25
+faiss-cpu
