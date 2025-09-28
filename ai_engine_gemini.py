@@ -87,16 +87,25 @@ _gemini_chat_model = GoogleGenerativeAI(model="gemini-2.5-flash")
 GENERATION_LLM = _gemini_chat_model
 LLAMA_INDEX_LLM = LangChainLLM(llm=_gemini_chat_model, system_prompt="")
 
-embed_model = GoogleGenAIEmbedding(
+_DOCUMENT_EMBED_CONFIG = types.EmbedContentConfig(
+    task_type="RETRIEVAL_DOCUMENT",
+    output_dimensionality=768,
+)
+
+_QUERY_EMBED_CONFIG = types.EmbedContentConfig(
+    task_type="RETRIEVAL_QUERY",
+    output_dimensionality=768,
+)
+
+# 既存のインデックスは RETRIEVAL_DOCUMENT で作成済みだが、
+# 検索時は RETRIEVAL_QUERY 用の埋め込みを使用する。
+query_embed_model = GoogleGenAIEmbedding(
     model_name="gemini-embedding-001",
-    embedding_config=types.EmbedContentConfig(
-        task_type="RETRIEVAL_DOCUMENT",
-        output_dimensionality=768
-    ),
+    embedding_config=_QUERY_EMBED_CONFIG,
 )
 
 Settings.llm = LLAMA_INDEX_LLM
-Settings.embed_model = embed_model
+Settings.embed_model = query_embed_model
 Settings.prompt_helper = prompt_helper
 
 EVAL_DIR = Path("evaluation")
@@ -743,7 +752,12 @@ def load_all_indices():
             logging.warning(f"Persist directory not found in {subdir}, skipping...")
             continue
         ctx = StorageContext.from_defaults(persist_dir=persist)
-        idx = load_index_from_storage(ctx)
+        idx = load_index_from_storage(
+            ctx,
+            llm=LLAMA_INDEX_LLM,
+            embed_model=query_embed_model,
+            prompt_helper=prompt_helper,
+        )
         indices.append(idx)
         summaries.append(f"ファイル: {subdir}")
 
