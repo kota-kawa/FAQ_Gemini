@@ -3,49 +3,126 @@
 
 """
 docx_to_qa_jsonl_thinking.py
-- .docx → チャンク → Q/A → JSONL
-- 機能:
-  * Gemini OpenAI互換: top-level reasoning_effort（none/low/medium/high）
-  * OpenAI本家: reasoning={"effort": "..."} を送信
-  * （任意）Geminiネイティブ thinkingBudget を extra_body.google.thinking_config で指定（--think-budget）
-  * DOCX: 段落/表の出現順保持で抽出
-  * 既存JSONLを読み戻して重複回避
-  * 手書きリトライ（--max-retries 反映）
-  * 出力JSONLとステートの**親ディレクトリ自動作成** ← ★今回の追加
+- .docx を走査して Q/A を JSONL に書き出すバッチ。
+- 実行は常に:  python3 docx_to_qa_jsonl_thinking.py
+- thinking は常に 'high'。オプション不要。
 
-依存:
-  pip install openai python-dotenv python-docx tqdm
+主な改良点:
+* モデル返答を JSON に強制（json_schema -> json_object -> なし の順で試行）
+* パースの堅牢化（配列, {"pairs":[...]}, ```json ブロック```, Q: / A: 形式）
+* モデルが flash 系なら自動で gemini-2.5-pro に切替（thinking 対応のため）
+* 先頭200文字のデバッグ出力（最初の失敗のみ）
 """
 
-from __future__ import annotations
-
-import argparse
-import json
 import os
 import re
 import sys
+import json
 import time
+import glob
 import random
 from dataclasses import dataclass
-from typing import List, Dict, Any, Tuple, Set, Optional
+from typing import List, Dict, Any, Optional, Set, Tuple
+from pathlib import Path
 
 from dotenv import load_dotenv
 from tqdm import tqdm
 
-# python-docx（順序保持）
 from docx import Document
 from docx.oxml.text.paragraph import CT_P
 from docx.oxml.table import CT_Tbl
 from docx.table import Table
 from docx.text.paragraph import Paragraph
 
-# OpenAI SDK（OpenAI互換でも利用）
 from openai import OpenAI
 from openai import APIError, RateLimitError, APITimeoutError, InternalServerError
 
+# =========================
+# 設定と定数
+# =========================
+
+SYSTEM_PROMPT = (
+    "You are a meticulous annotator that converts source text into exhaustive Japanese Q/A pairs.\n"
+    "Rules:\n"
+    "1) Use ONLY the provided text; do not add outside knowledge.\n"
+    "2) Cover ALL atomic facts, definitions, enumerations, properties, constraints, procedures, exceptions, and relationships.\n"
+    "3) Keep each question focused on ONE fact/topic whenever possible.\n"
+    "4) Output JSON **ONLY**.\n"
+    "5) Each item: {\"question\": string, \"answer\": string}.\n"
+)
+
+USER_PROMPT_TEMPLATE = (
+    "Convert the following text chunk into exhaustive Q/A pairs.\n"
+    "Return ONLY JSON, no commentary.\n"
+    "TEXT CHUNK:\n"
+    "------------------\n"
+    "{chunk}\n"
+    "------------------\n"
+    "Your JSON **must** be an object with key `pairs` which is an array of objects with keys `question` and `answer`.\n"
+)
+
+RETRY_PROMPT_APPEND = (
+    "\nIMPORTANT: The previous output was invalid. Return ONLY valid JSON object like:\n"
+    "{\"pairs\": [{\"question\": \"...\", \"answer\": \"...\"}, ...]}\n"
+)
 
 # =========================
-# 設定
+# ユーティリティ
+# =========================
+
+def ensure_parent_dir(path: str) -> None:
+    p = os.path.abspath(path)
+    d = os.path.dirname(p)
+    if d and not os.path.exists(d):
+        os.makedirs(d, exist_ok=True)
+
+def normalize_ws(s: str) -> str:
+    return re.sub(r"\s+", " ", (s or "")).strip()
+
+# =========================
+# DOCX 読み込み（順序保持）
+# =========================
+
+def iter_block_items(doc):
+    body = doc.element.body
+    for child in body.iterchildren():
+        if isinstance(child, CT_P):
+            yield Paragraph(child, doc)
+        elif isinstance(child, CT_Tbl):
+            yield Table(child, doc)
+
+def extract_text_from_docx(path: str) -> str:
+    doc = Document(path)
+    lines: List[str] = []
+    for block in iter_block_items(doc):
+        if isinstance(block, Paragraph):
+            t = block.text.strip()
+            if t:
+                lines.append(t)
+        elif isinstance(block, Table):
+            for row in block.rows:
+                cells = [normalize_ws(c.text) for c in row.cells]
+                if any(cells):
+                    lines.append(" | ".join(cells))
+    return "\n".join(lines)
+
+def chunk_text(text: str, max_chars: int = 5000, overlap: int = 400) -> List[str]:
+    text = text or ""
+    if not text:
+        return []
+    chunks: List[str] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        j = min(n, i + max_chars)
+        chunks.append(text[i:j])
+        if j >= n:
+            break
+        i = j - overlap
+    return chunks
+
+# =========================
+# OpenAI 互換クライアント
 # =========================
 
 @dataclass
@@ -54,410 +131,382 @@ class Settings:
     base_url: str
     model: str
     temperature: float = 0.2
-    max_retries: int = 3
+    max_retries: int = 4
+    think_effort: Optional[str] = "high"  # 固定
+    think_budget: Optional[int] = None    # Geminiネイティブ budget（未使用: OpenAI互換）
     rate_wait: float = 0.0
-    think_effort: Optional[str] = None   # "none" | "low" | "medium" | "high"
-    think_budget: Optional[int] = None   # -1=dynamic, 0=disable(Flash/Lite), N>=1
 
     @property
     def is_gemini_compat(self) -> bool:
         return "generativelanguage.googleapis.com" in (self.base_url or "")
 
-    @property
-    def is_openai(self) -> bool:
-        return "api.openai.com" in (self.base_url or "") or (self.base_url or "") == ""
+class ChatClient:
+    def __init__(self, s: Settings):
+        self.s = s
+        self.client = OpenAI(api_key=s.api_key, base_url=s.base_url)
 
+    def _build_params(self, messages: List[Dict[str, str]], response_format_mode: str) -> Dict[str, Any]:
+        params: Dict[str, Any] = dict(
+            model=self.s.model,
+            temperature=self.s.temperature,
+            messages=messages,
+        )
 
-SYSTEM_PROMPT = (
-    "You are a meticulous annotator that converts source text into exhaustive Q/A pairs.\n"
-    "Constraints:\n"
-    "1) Use ONLY the provided text; do NOT add external knowledge.\n"
-    "2) Cover ALL atomic facts, definitions, enumerations, properties, constraints, procedures, and relationships present in the text.\n"
-    "3) Keep each question focused on ONE fact/topic whenever possible.\n"
-    "4) Answers must be self-contained, precise, and directly supported by the text.\n"
-    "5) Output STRICT JSON with this schema ONLY: [{\"question\": str, \"answer\": str}, ...]. No preface, no trailing notes.\n"
-    "6) Preserve the language of the source text (e.g., Japanese text → Japanese Q/A).\n"
-)
+        # reasoning / thinking
+        if self.s.is_gemini_compat:
+            # Gemini OpenAI互換: reasoning_effort or extra_body.google.thinking_config
+            if self.s.think_budget is not None:
+                params["extra_body"] = {"google": {"thinking_config": {"thinking_budget": self.s.think_budget}}}
+            else:
+                params["reasoning_effort"] = self.s.think_effort or "high"
+        else:
+            params["reasoning"] = {"effort": self.s.think_effort or "high"}
 
-USER_PROMPT_TEMPLATE = (
-    "Convert the following SOURCE TEXT into an exhaustive set of Q/A pairs.\n"
-    "Return ONLY a JSON array of objects with keys 'question' and 'answer'.\n\n"
-    "SOURCE TEXT:\n"
-    "{chunk}\n"
-)
+        # response_format
+        if response_format_mode == "json_schema":
+            params["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "qa_pairs",
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "pairs": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "question": {"type": "string"},
+                                        "answer": {"type": "string"}
+                                    },
+                                    "required": ["question", "answer"],
+                                    "additionalProperties": False
+                                }
+                            }
+                        },
+                        "required": ["pairs"],
+                        "additionalProperties": False
+                    },
+                    "strict": True
+                }
+            }
+        elif response_format_mode == "json_object":
+            params["response_format"] = {"type": "json_object"}
 
-# =========================
-# ユーティリティ
-# =========================
+        return params
 
-def ensure_parent_dir(path: Optional[str]) -> None:
-    """
-    path の親ディレクトリを作成（既にあれば何もしない）。
-    path が None/空 の場合は無視。
-    """
-    if not path:
-        return
-    d = os.path.dirname(os.path.abspath(path)) or "."
-    os.makedirs(d, exist_ok=True)
-
-# =========================
-# DOCX 抽出（段落/表の出現順を保持）
-# =========================
-
-def iter_block_items(doc: Document):
-    parent_elm = doc.element.body
-    for child in parent_elm.iterchildren():
-        if isinstance(child, CT_P):
-            yield Paragraph(child, doc)
-        elif isinstance(child, CT_Tbl):
-            yield Table(child, doc)
-
-def extract_text_from_docx(path: str) -> str:
-    doc = Document(path)
-    parts: List[str] = []
-    for block in iter_block_items(doc):
-        if isinstance(block, Paragraph):
-            t = (block.text or "").strip()
-            if t:
-                parts.append(t)
-        elif isinstance(block, Table):
-            for row in block.rows:
-                cells = []
-                for cell in row.cells:
-                    tx = (cell.text or "").strip()
-                    if tx:
-                        cells.append(tx)
-                if cells:
-                    parts.append(" | ".join(cells))
-    text = "\n".join(parts)
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    return text.strip()
-
-# =========================
-# チャンク分割
-# =========================
-
-def chunk_text(text: str, max_chars: int = 8000, overlap: int = 400) -> List[str]:
-    if max_chars <= 0:
-        raise ValueError("max_chars must be > 0")
-    if overlap < 0 or overlap >= max_chars:
-        raise ValueError("overlap must be >= 0 and < max_chars")
-    n = len(text)
-    chunks = []
-    start = 0
-    while start < n:
-        end = min(start + max_chars, n)
-        chunks.append(text[start:end].strip())
-        if end >= n:
-            break
-        start = end - overlap
-    return chunks
-
-# =========================
-# OpenAI互換呼び出し（手書きリトライ）
-# =========================
-
-class GeminiClient:
-    def __init__(self, settings: Settings):
-        self.s = settings
-        self.client = OpenAI(api_key=self.s.api_key, base_url=self.s.base_url)
-
-    def qa_from_chunk(self, chunk: str) -> List[Dict[str, str]]:
+    def qa_from_chunk(self, chunk: str, debug_tag: str = "") -> List[Dict[str, str]]:
+        """
+        返答を堅牢に JSON パース。複数の response_format で試行。
+        """
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": USER_PROMPT_TEMPLATE.format(chunk=chunk)},
         ]
 
+        formats_to_try = ["json_schema", "json_object", "none"]
         last_err: Optional[Exception] = None
-        for attempt in range(1, max(1, self.s.max_retries) + 1):
-            try:
-                params: Dict[str, Any] = dict(
-                    model=self.s.model,
-                    temperature=self.s.temperature,
-                    messages=messages,
-                )
+        first_failure_logged = False
 
-                # --- thinking / reasoning の付与 ---
-                if self.s.is_gemini_compat:
-                    # Gemini の OpenAI互換は reasoning_effort をトップレベルで受け付ける
-                    if self.s.think_budget is not None:
-                        params["extra_body"] = {
-                            "google": {
-                                "thinking_config": {
-                                    "thinking_budget": self.s.think_budget
-                                }
-                            }
-                        }
-                    elif self.s.think_effort:
-                        params["reasoning_effort"] = self.s.think_effort
-                else:
-                    # OpenAI 本家の推論モデル（o4/o3 など）
-                    if self.s.think_effort:
-                        params["reasoning"] = {"effort": self.s.think_effort}
+        for attempt in range(1, self.s.max_retries + 1):
+            for fmt in formats_to_try:
+                try:
+                    params = self._build_params(messages, "none" if attempt > 1 and fmt == "json_schema" else fmt)
+                    resp = self.client.chat.completions.create(**params)
+                    content = (resp.choices[0].message.content if resp and resp.choices else "") or ""
 
-                resp = self.client.chat.completions.create(**params)
+                    qa = self._parse_response(content)
+                    if qa:
+                        return qa
 
-                if self.s.rate_wait > 0:
-                    time.sleep(self.s.rate_wait)
+                    # 失敗時ログ（最初の1回だけ）
+                    if not first_failure_logged:
+                        preview = normalize_ws(content)[:200]
+                        tqdm.write(f"[DEBUG]{('['+debug_tag+']') if debug_tag else ''} Unparsable output preview: {preview}")
+                        first_failure_logged = True
 
-                content = resp.choices[0].message.content if resp and resp.choices else ""
-                return self._parse_json_array(content, fallback_repair=True)
+                except (APIError, RateLimitError, APITimeoutError, InternalServerError) as e:
+                    last_err = e
+                    time.sleep(min(30.0, (2.0 ** (attempt - 1)) + random.uniform(0, 0.5)))
+                    continue
+                except Exception as e:
+                    last_err = e
+                    break
 
-            except (APIError, RateLimitError, APITimeoutError, InternalServerError) as e:
-                last_err = e
-                time.sleep(min(30.0, (2.0 ** (attempt - 1)) + random.uniform(0, 0.5)))
-                continue
-            except Exception as e:
-                last_err = e
-                break
+            # 追いリトライ: プロンプトを強化
+            messages = [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": USER_PROMPT_TEMPLATE.format(chunk=chunk) + RETRY_PROMPT_APPEND},
+            ]
 
-        raise last_err if last_err else RuntimeError("Unknown error in qa_from_chunk")
+        if last_err:
+            raise last_err
+        return []
 
     @staticmethod
-    def _parse_json_array(text: str, fallback_repair: bool = True) -> List[Dict[str, str]]:
+    def _parse_response(text: str) -> List[Dict[str, str]]:
+        """
+        返答を多段で解析:
+        1) 純 JSON: {"pairs":[...]}
+        2) 純 JSON: [ ... ]
+        3) ```json ... ``` 抽出
+        4) Q: / A: パターン抽出
+        """
         if not text:
-            raise ValueError("Empty response from model.")
-        fence = re.search(r"```(?:json)?\s*(.*?)```", text, flags=re.DOTALL | re.IGNORECASE)
-        candidate = fence.group(1) if fence else text
+            return []
 
-        start_idx = candidate.find("[")
-        end_idx = candidate.rfind("]")
-        if start_idx == -1 or end_idx == -1 or end_idx <= start_idx:
-            if not fallback_repair:
-                raise ValueError("Failed to locate JSON array in response.")
-            objs = re.findall(r"\{.*?\}", candidate, flags=re.DOTALL)
-            repaired = []
-            for o in objs:
-                try:
-                    it = json.loads(o)
-                    q = str(it.get("question", "")).strip()
-                    a = str(it.get("answer", "")).strip()
+        def as_list(obj) -> List[Dict[str, str]]:
+            out: List[Dict[str, str]] = []
+            for it in obj:
+                if isinstance(it, dict):
+                    q = normalize_ws(it.get("question", ""))
+                    a = normalize_ws(it.get("answer", ""))
                     if q and a:
-                        repaired.append({"question": q, "answer": a})
-                except json.JSONDecodeError:
-                    continue
-            if not repaired:
-                raise ValueError("Repair failed: no valid objects.")
-            tqdm.write(f"[Parser] repaired {len(repaired)} item(s) from non-array text.")
-            return repaired
+                        out.append({"question": q, "answer": a})
+            return out
 
-        json_str = candidate[start_idx:end_idx + 1]
+        # --- 1) {"pairs":[...]}
         try:
-            data = json.loads(json_str)
-        except json.JSONDecodeError:
-            if not fallback_repair:
-                raise
-            data = json.loads(re.sub(r",\s*]", "]", json_str))
+            data = json.loads(text)
+            if isinstance(data, dict) and isinstance(data.get("pairs"), list):
+                return as_list(data["pairs"])
+            if isinstance(data, list):
+                return as_list(data)
+        except Exception:
+            pass
 
-        if not isinstance(data, list):
-            raise ValueError("Parsed data is not a list.")
+        # --- 2) ```json ... ```
+        m = re.search(r"```json\s*(\{.*?\}|\[.*?\])\s*```", text, flags=re.S | re.I)
+        if m:
+            try:
+                data = json.loads(m.group(1))
+                if isinstance(data, dict) and isinstance(data.get("pairs"), list):
+                    return as_list(data["pairs"])
+                if isinstance(data, list):
+                    return as_list(data)
+            except Exception:
+                pass
 
-        cleaned: List[Dict[str, str]] = []
-        for it in data:
-            if isinstance(it, dict):
-                q = str(it.get("question", "")).strip()
-                a = str(it.get("answer", "")).strip()
+        # --- 3) 末尾の配列だけ抜く
+        m = re.search(r"(\[\s*\{.*\}\s*\])\s*$", text, flags=re.S)
+        if m:
+            try:
+                data = json.loads(m.group(1))
+                if isinstance(data, list):
+                    return as_list(data)
+            except Exception:
+                pass
+
+        # --- 4) Q: / A: を素朴に抽出（最後の砦）
+        qa_list: List[Dict[str, str]] = []
+        blocks = re.split(r"(?:^|\n)Q\s*[:：]", text)
+        for b in blocks[1:]:
+            parts = re.split(r"\nA\s*[:：]", b, maxsplit=1)
+            if len(parts) == 2:
+                q = normalize_ws(parts[0])
+                a = normalize_ws(parts[1].split("\nQ:")[0])
                 if q and a:
-                    cleaned.append({"question": q, "answer": a})
-        return cleaned
+                    qa_list.append({"question": q, "answer": a})
+        return qa_list
 
 # =========================
-# 重複検知（既存JSONLも読む）
+# JSONL
 # =========================
-
-def normalize_question(q: str) -> str:
-    s = re.sub(r"\s+", " ", q.strip())
-    return s.lower()
 
 def load_existing_questions(jsonl_path: str) -> Set[str]:
     seen: Set[str] = set()
     if not os.path.exists(jsonl_path):
         return seen
-    with open(jsonl_path, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rec = json.loads(line)
-                q = str(rec.get("question", "")).strip()
-                if q:
-                    seen.add(normalize_question(q))
-            except Exception:
-                continue
+    try:
+        with open(jsonl_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                    q = normalize_ws(obj.get("question", ""))
+                    if q:
+                        seen.add(q)
+                except Exception:
+                    continue
+    except Exception:
+        pass
     return seen
 
+def append_jsonl(jsonl_path: str, qa_list: List[Dict[str, str]], seen: Set[str]) -> int:
+    if not qa_list:
+        return 0
+    ensure_parent_dir(jsonl_path)
+    wrote = 0
+    with open(jsonl_path, "a", encoding="utf-8") as f:
+        for qa in qa_list:
+            q = normalize_ws(qa.get("question", ""))
+            a = normalize_ws(qa.get("answer", ""))
+            if not q or not a:
+                continue
+            if q in seen:
+                continue
+            f.write(json.dumps({"question": q, "answer": a}, ensure_ascii=False) + "\n")
+            seen.add(q)
+            wrote += 1
+    return wrote
+
 # =========================
-# ステート（再開用）
+# ステート（途中再開）
 # =========================
 
 @dataclass
-class RunState:
+class State:
     processed: Set[int]
-    def to_json(self) -> Dict[str, Any]:
-        return {"processed": sorted(list(self.processed))}
-    @staticmethod
-    def from_json(d: Dict[str, Any]) -> "RunState":
-        return RunState(processed=set(d.get("processed", [])))
 
-def load_state(path: Optional[str]) -> RunState:
-    if not path or not os.path.exists(path):
-        return RunState(processed=set())
-    with open(path, "r", encoding="utf-8") as f:
-        return RunState.from_json(json.load(f))
+def load_state(state_path: str) -> State:
+    if not os.path.exists(state_path):
+        return State(processed=set())
+    try:
+        with open(state_path, "r", encoding="utf-8") as f:
+            obj = json.load(f)
+        return State(processed=set(obj.get("processed", [])))
+    except Exception:
+        return State(processed=set())
 
-def save_state(path: Optional[str], state: RunState) -> None:
-    if not path:
-        return
-    ensure_parent_dir(path)
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(state.to_json(), f, ensure_ascii=False, indent=2)
-    os.replace(tmp, path)
+def save_state(state_path: str, state: State) -> None:
+    ensure_parent_dir(state_path)
+    with open(state_path, "w", encoding="utf-8") as f:
+        json.dump({"processed": sorted(list(state.processed))}, f, ensure_ascii=False, indent=2)
 
 # =========================
-# メイン処理
+# 単一ファイル処理
 # =========================
-
-def build_settings(args: argparse.Namespace) -> Settings:
-    load_dotenv()
-    api_key = os.getenv("GEMINI_API_KEY") or os.getenv("OPENAI_API_KEY") or ""
-    if args.api_key:
-        api_key = args.api_key
-    if not api_key:
-        print("ERROR: API key not found. Set GEMINI_API_KEY (or OPENAI_API_KEY) in .env or pass --api-key.", file=sys.stderr)
-        sys.exit(1)
-
-    base_url = os.getenv("OPENAI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai/")
-    if args.base_url:
-        base_url = args.base_url
-
-    model = args.model or os.getenv("GEMINI_MODEL", "gemini-2.5-pro")
-
-    think_effort = None
-    think_budget = None
-    if args.think:
-        think_effort = args.think_effort
-        think_budget = args.think_budget
-    if think_effort and think_budget is not None:
-        print("[warn] --think-effort と --think-budget は同時指定できません。--think-budget を優先します。", file=sys.stderr)
-        think_effort = None
-
-    return Settings(
-        api_key=api_key,
-        base_url=base_url,
-        model=model,
-        temperature=args.temperature,
-        max_retries=args.max_retries,
-        rate_wait=args.rate_wait,
-        think_effort=think_effort,
-        think_budget=think_budget,
-    )
 
 def process_docx_to_jsonl(
     in_docx: str,
     out_jsonl: str,
     settings: Settings,
-    chunk_chars: int = 8000,
+    chunk_chars: int = 5000,
     chunk_overlap: int = 400,
     workers: int = 2,
     state_path: Optional[str] = None,
 ) -> None:
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     text = extract_text_from_docx(in_docx)
-    if not text:
-        print("No text extracted from DOCX.", file=sys.stderr)
+    if not text.strip():
+        print(f"[WARN] No text extracted: {in_docx}", file=sys.stderr)
         return
 
     chunks = chunk_text(text, max_chars=chunk_chars, overlap=chunk_overlap)
-    total_chunks = len(chunks)
-    print(f"Extracted {total_chunks} chunk(s).")
+    if not chunks:
+        print(f"[WARN] No chunks for: {in_docx}", file=sys.stderr)
+        return
 
-    # 出力/ステートの親ディレクトリ作成（無ければ）
     ensure_parent_dir(out_jsonl)
-    ensure_parent_dir(state_path)
+    if state_path:
+        ensure_parent_dir(state_path)
 
-    seen_questions = load_existing_questions(out_jsonl)
-    if seen_questions:
-        print(f"Loaded {len(seen_questions)} existing question(s) from {out_jsonl}.")
+    seen = load_existing_questions(out_jsonl)
+    if seen:
+        print(f"Loaded {len(seen)} existing Qs from {out_jsonl}")
 
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-    state = load_state(state_path)
-    client = GeminiClient(settings)
-    pending = [i for i in range(total_chunks) if i not in state.processed]
+    client = ChatClient(settings)
+    state = load_state(state_path) if state_path else State(processed=set())
+    pending = [i for i in range(len(chunks)) if i not in state.processed]
 
-    def task(idx: int, chunk: str):
-        return idx, client.qa_from_chunk(chunk)
+    def task(idx: int) -> Tuple[int, List[Dict[str, str]]]:
+        qa = client.qa_from_chunk(chunks[idx], debug_tag=f"{Path(in_docx).name}#{idx}")
+        return idx, qa
 
     with ThreadPoolExecutor(max_workers=max(1, workers)) as ex, tqdm(total=len(pending), desc="Chunks") as pbar:
-        future_map = {ex.submit(task, i, chunks[i]): i for i in pending}
-        # 'a' で開くとファイルが無くても新規作成される
-        with open(out_jsonl, "a", encoding="utf-8") as fout:
-            for fut in as_completed(future_map):
-                idx = future_map[fut]
-                try:
-                    _, qa_list = fut.result()
-                except Exception as e:
-                    print(f"[Chunk {idx}] ERROR: {e}", file=sys.stderr)
-                    pbar.update(1)
-                    continue
-
-                written = 0
-                for item in qa_list:
-                    qn = normalize_question(item["question"])
-                    if not qn or qn in seen_questions:
-                        continue
-                    seen_questions.add(qn)
-                    fout.write(json.dumps({"question": item["question"], "answer": item["answer"]}, ensure_ascii=False) + "\n")
-                    written += 1
-
+        futmap = {ex.submit(task, i): i for i in pending}
+        for fut in as_completed(futmap):
+            idx = futmap[fut]
+            try:
+                _, qa_list = fut.result()
+            except Exception as e:
+                print(f"[Chunk {idx}] ERROR: {e}", file=sys.stderr)
                 state.processed.add(idx)
                 save_state(state_path, state)
                 pbar.update(1)
-                tqdm.write(f"[Chunk {idx}] wrote {written} Q/A")
+                continue
+
+            wrote = append_jsonl(out_jsonl, qa_list, seen)
+            state.processed.add(idx)
+            save_state(state_path, state)
+            pbar.update(1)
+            tqdm.write(f"[Chunk {idx}] wrote {wrote} Q/A")
 
     print("Done.")
 
 # =========================
-# CLI
+# メイン（ディレクトリ一括）
 # =========================
 
 def main():
-    p = argparse.ArgumentParser(description="Convert DOCX to exhaustive Q/A JSONL via OpenAI-compatible endpoint.")
-    p.add_argument("input_docx", help="入力 .docx パス")
-    p.add_argument("output_jsonl", help="出力 .jsonl パス（追記）")
+    # ハードコード + 環境変数で上書き可
+    load_dotenv()
 
-    p.add_argument("--chunk-chars", type=int, default=8000, help="チャンク文字数上限（既定: 8000）")
-    p.add_argument("--chunk-overlap", type=int, default=400, help="チャンク重なり文字数（既定: 400）")
-    p.add_argument("--workers", type=int, default=2, help="並列ワーカー数（既定: 2）")
-    p.add_argument("--state", dest="state_path", default=None, help="再開用ステートファイルパス（例: ./state/qa_state.json）")
+    INPUT_DIR = Path(os.getenv("DOCX_IN_DIR", "./civil-law")).resolve()
+    OUTPUT_DIR = Path(os.getenv("JSONL_OUT_DIR", "./output_jsonl")).resolve()
+    STATE_DIR = Path(os.getenv("STATE_DIR", "./state")).resolve()
 
-    p.add_argument("--temperature", type=float, default=0.2, help="生成温度（既定: 0.2）")
-    p.add_argument("--max-retries", type=int, default=3, help="API リトライ回数（既定: 3）")
-    p.add_argument("--rate-wait", type=float, default=0.0, help="各API成功後の待機秒（既定: 0）")
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
 
-    p.add_argument("--api-key", default=None, help="API キー（.env より優先）")
-    p.add_argument("--base-url", default=None, help="OpenAI 互換エンドポイント（.env より優先）")
-    p.add_argument("--model", default=None, help="モデル名（.env の GEMINI_MODEL より優先）")
+    api_key = os.getenv("GEMINI_API_KEY") or os.getenv("OPENAI_API_KEY") or ""
+    if not api_key:
+        print("ERROR: Set GEMINI_API_KEY or OPENAI_API_KEY in .env", file=sys.stderr)
+        sys.exit(1)
 
-    # thinking / reasoning
-    p.add_argument("--think", action="store_true", help="thinking/reasoning を有効化（対応エンドポイント/モデルが必要）")
-    p.add_argument("--think-effort", choices=["none", "low", "medium", "high"], default="medium",
-                   help="OpenAI互換: reasoning_effort / OpenAI本家: reasoning.effort（既定: medium）")
-    p.add_argument("--think-budget", type=int, default=None,
-                   help="Geminiネイティブ thinkingBudget（-1=dynamic, 0=disable(Flash/Lite), N>=1）。effortと併用不可。")
+    base_url = os.getenv("OPENAI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai/")
+    model = os.getenv("GEMINI_MODEL", "gemini-2.5-pro")
+    # flash 強制回避（thinkingが効かないため）
+    if "flash" in model.lower():
+        print(f"[Info] Model '{model}' does not support reasoning high. Using 'gemini-2.5-pro' instead.")
+        model = "gemini-2.5-pro"
 
-    args = p.parse_args()
-    s = build_settings(args)
-
-    process_docx_to_jsonl(
-        in_docx=args.input_docx,
-        out_jsonl=args.output_jsonl,
-        settings=s,
-        chunk_chars=args.chunk_chars,
-        chunk_overlap=args.chunk_overlap,
-        workers=args.workers,
-        state_path=args.state_path,
+    settings = Settings(
+        api_key=api_key,
+        base_url=base_url,
+        model=model,
+        temperature=0.2,
+        max_retries=4,
+        think_effort="high",
+        think_budget=None,
+        rate_wait=0.0,
     )
+
+    # 入力 .docx 一覧（~$ など一時ファイル除外）
+    docs = sorted([p for p in INPUT_DIR.glob("*.docx") if p.is_file() and not p.name.startswith("~$")])
+    if not docs:
+        print(f"[Info] No .docx files found in {INPUT_DIR}")
+        return
+
+    print(f"[Start] Converting {len(docs)} file(s)")
+    print(f"  INPUT_DIR = {INPUT_DIR}")
+    print(f"  OUTPUT_DIR = {OUTPUT_DIR}")
+    print(f"  STATE_DIR  = {STATE_DIR}")
+    print(f"  Model={settings.model} BaseURL={settings.base_url} ReasoningEffort=high")
+
+    for docx_path in docs:
+        out_path = OUTPUT_DIR / f"{docx_path.stem}.jsonl"
+        state_path = STATE_DIR / f"{docx_path.stem}_state.json"
+
+        print(f"\n[File] {docx_path.name} -> {out_path.name}")
+        try:
+            process_docx_to_jsonl(
+                in_docx=str(docx_path),
+                out_jsonl=str(out_path),
+                settings=settings,
+                chunk_chars=5000,
+                chunk_overlap=400,
+                workers=2,
+                state_path=str(state_path),
+            )
+        except Exception as e:
+            print(f"[Error] {docx_path.name}: {e}", file=sys.stderr)
+            continue
+
+    print("\n[Done] All files processed.")
 
 if __name__ == "__main__":
     main()
