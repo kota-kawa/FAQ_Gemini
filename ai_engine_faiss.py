@@ -198,3 +198,44 @@ def get_answer(question: str):
 def reset_history():
     """conversation_history.json を空にする"""
     save_conversation_history([])
+
+
+SUMMARY_PROMPT = """あなたは会話を俯瞰し、重要なポイントを簡潔にまとめるアシスタントです。
+
+【会話履歴】
+{history}
+
+【要約ルール】
+- 重要な質問や回答、決定事項、未解決の点などを中心に2〜5行でまとめてください。
+- 会話がない場合は、その旨を1行で伝えてください。
+- 必ず日本語で出力してください。
+"""
+
+
+def _format_history_for_summary(history: List[dict], limit: int = 20) -> str:
+    if not history:
+        return "（会話はありません）"
+    recent = history[-limit:]
+    return "\n".join(f"{entry['role']}: {entry['message']}" for entry in recent)
+
+
+def summarize_conversation(history: List[dict]) -> str:
+    if not history:
+        return "まだ会話はありません。"
+
+    formatted_history = _format_history_for_summary(history)
+    prompt_text = SUMMARY_PROMPT.format(history=formatted_history)
+
+    summary_response = llm.invoke(prompt_text)
+    if isinstance(summary_response, str):
+        return summary_response.strip()
+    return (
+        getattr(summary_response, "content", None)
+        or getattr(summary_response, "text", None)
+        or str(summary_response)
+    ).strip()
+
+
+def get_conversation_summary() -> str:
+    history = load_conversation_history()
+    return summarize_conversation(history)
