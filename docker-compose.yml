@@ -1,13 +1,16 @@
 services:
   qasystem:
     build: .
+    container_name: faq_gemini
     ports:
       - "5000:5000"
     volumes:
       - .:/app      # プロジェクト全体を /app にマウント
     networks:
-      - default
-      - multi_agent_network
+      default:
+      multi_agent_network:
+        aliases:
+          - faq_gemini
 
 networks:
   multi_agent_network:
