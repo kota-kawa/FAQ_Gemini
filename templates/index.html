@@ -60,11 +60,23 @@
       padding: 16px;
       background: #f6f8ff;
       border-bottom: 1px solid #e1e8ff;
+      transition: border-color var(--transition), background var(--transition);
+    }
+    .summary-panel.collapsed {
+      border-bottom-color: transparent;
+      background: #f1f4ff;
+    }
+    .summary-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      cursor: pointer;
+      user-select: none;
     }
     .summary-title {
       font-weight: bold;
       color: var(--primary-dark);
-      margin-bottom: 8px;
       display: flex;
       align-items: center;
       gap: 8px;
@@ -73,12 +85,46 @@
     .summary-title::before {
       content: '\1F4AC';
     }
+    .summary-toggle {
+      background: none;
+      border: none;
+      display: flex;
+      align-items: center;
+      color: var(--primary-dark);
+      font-size: 0.85rem;
+      gap: 4px;
+      cursor: pointer;
+      transition: color var(--transition), transform var(--transition);
+    }
+    .summary-toggle-icon {
+      display: inline-flex;
+      width: 16px;
+      height: 16px;
+      align-items: center;
+      justify-content: center;
+      transform-origin: center;
+      transition: transform var(--transition);
+    }
+    .summary-panel.collapsed .summary-toggle-icon {
+      transform: rotate(-90deg);
+    }
     .summary-content {
       font-size: 0.95rem;
       line-height: 1.6;
       color: #333;
       white-space: pre-wrap;
       word-break: break-word;
+      margin-top: 8px;
+      transition: max-height var(--transition), opacity var(--transition);
+      max-height: 320px;
+      overflow: hidden;
+      opacity: 1;
+    }
+    .summary-panel.collapsed .summary-content {
+      max-height: 0;
+      opacity: 0;
+      margin-top: 0;
+      pointer-events: none;
     }
     .summary-panel.loading .summary-content {
       color: #666;
@@ -200,8 +246,14 @@
       <button class="reset-btn" title="リセット">&#x21bb;</button>
     </div>
     <div id="summary-panel" class="summary-panel">
-      <div class="summary-title">会話の要約</div>
-      <div id="conversation-summary" class="summary-content">まだ会話はありません。</div>
+      <div class="summary-header" id="summary-toggle">
+        <div class="summary-title">会話の要約</div>
+        <button type="button" class="summary-toggle" aria-expanded="true" aria-controls="conversation-summary">
+          <span class="summary-toggle-label">閉じる</span>
+          <span class="summary-toggle-icon">&#9650;</span>
+        </button>
+      </div>
+      <div id="conversation-summary" class="summary-content" role="region" aria-live="polite">まだ会話はありません。</div>
     </div>
     <div id="chat" class="chat-box"></div>
     <form id="chat-form" class="input-area">
@@ -221,6 +273,10 @@
     const resetBtn= document.querySelector('.reset-btn');
     const summaryPanel = document.getElementById('summary-panel');
     const summaryContent = document.getElementById('conversation-summary');
+    const summaryToggle = document.getElementById('summary-toggle');
+    const summaryToggleButton = summaryToggle.querySelector('.summary-toggle');
+    const summaryToggleLabel = summaryToggleButton.querySelector('.summary-toggle-label');
+    const summaryToggleIcon = summaryToggleButton.querySelector('.summary-toggle-icon');
     const DEFAULT_SUMMARY_TEXT = 'まだ会話はありません。';
 
     async function fetchHistory() {
@@ -262,6 +318,18 @@
         summaryPanel.classList.remove('loading');
       }
     }
+
+    function updateSummaryToggle(isCollapsed) {
+      summaryPanel.classList.toggle('collapsed', isCollapsed);
+      summaryToggleButton.setAttribute('aria-expanded', String(!isCollapsed));
+      summaryToggleLabel.textContent = isCollapsed ? '開く' : '閉じる';
+      summaryToggleIcon.innerHTML = isCollapsed ? '&#9660;' : '&#9650;';
+    }
+
+    summaryToggle.addEventListener('click', () => {
+      const isCurrentlyCollapsed = summaryPanel.classList.contains('collapsed');
+      updateSummaryToggle(!isCurrentlyCollapsed);
+    });
 
     fetchHistory();
     refreshSummary({ showLoading: true });
