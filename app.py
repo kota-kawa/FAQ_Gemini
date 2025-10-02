@@ -14,6 +14,19 @@ app.secret_key = os.getenv("SECRET_KEY", "default_secret_key")
 logging.basicConfig(level=logging.DEBUG)
 
 
+@app.after_request
+def add_cors_headers(response):
+    """Allow all domains to access the API without altering existing logic."""
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    request_headers = request.headers.get("Access-Control-Request-Headers")
+    if request_headers:
+        response.headers["Access-Control-Allow-Headers"] = request_headers
+    else:
+        response.headers.setdefault("Access-Control-Allow-Headers", "Content-Type")
+    return response
+
+
 @app.route("/rag_answer", methods=["POST"])
 def rag_answer():
     """POST: { "question": "..." } → RAG で回答"""
@@ -34,6 +47,13 @@ def reset_history():
     """会話履歴をリセット"""
     ai_engine.reset_history()
     return jsonify({"status": "Conversation history reset."})
+
+
+@app.route("/conversation_history", methods=["GET"])
+def conversation_history():
+    """現在の会話履歴を取得"""
+    history = ai_engine.load_conversation_history()
+    return jsonify({"conversation_history": history})
 
 
 @app.route("/")
