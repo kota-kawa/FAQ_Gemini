@@ -56,10 +56,18 @@ def reset_history():
 
 @app.route("/conversation_history", methods=["GET"])
 def conversation_history():
-
-    history = ai_engine.load_conversation_history()
-
+    history = ai_engine.get_conversation_history()
     return jsonify({"conversation_history": history})
+
+
+@app.route("/conversation_summary", methods=["GET"])
+def conversation_summary():
+    try:
+        summary = ai_engine.get_conversation_summary()
+        return jsonify({"summary": summary})
+    except Exception as e:
+        app.logger.exception("Error during conversation summarization:")
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/")

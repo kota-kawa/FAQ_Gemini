@@ -56,6 +56,35 @@
       transform: translateY(-50%) rotate(90deg);
     }
 
+    .summary-panel {
+      padding: 16px;
+      background: #f6f8ff;
+      border-bottom: 1px solid #e1e8ff;
+    }
+    .summary-title {
+      font-weight: bold;
+      color: var(--primary-dark);
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 1rem;
+    }
+    .summary-title::before {
+      content: '\1F4AC';
+    }
+    .summary-content {
+      font-size: 0.95rem;
+      line-height: 1.6;
+      color: #333;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .summary-panel.loading .summary-content {
+      color: #666;
+      font-style: italic;
+    }
+
     /* ===== チャット領域 ===== */
     .chat-box {
       flex: 1;
@@ -170,6 +199,10 @@
       Q&A Chat System
       <button class="reset-btn" title="リセット">&#x21bb;</button>
     </div>
+    <div id="summary-panel" class="summary-panel">
+      <div class="summary-title">会話の要約</div>
+      <div id="conversation-summary" class="summary-content">まだ会話はありません。</div>
+    </div>
     <div id="chat" class="chat-box"></div>
     <form id="chat-form" class="input-area">
       <input type="text" id="question" placeholder="質問を入力してください…" autocomplete="off" required />
@@ -186,6 +219,52 @@
     const form    = document.getElementById('chat-form');
     const input   = document.getElementById('question');
     const resetBtn= document.querySelector('.reset-btn');
+    const summaryPanel = document.getElementById('summary-panel');
+    const summaryContent = document.getElementById('conversation-summary');
+    const DEFAULT_SUMMARY_TEXT = 'まだ会話はありません。';
+
+    async function fetchHistory() {
+      try {
+        const res = await fetch('/conversation_history');
+        if (!res.ok) throw new Error('failed to load history');
+        const data = await res.json();
+        const history = Array.isArray(data.conversation_history) ? data.conversation_history : [];
+        chatBox.innerHTML = '';
+        history.forEach(entry => {
+          const role = (entry.role || '').toLowerCase() === 'user' ? 'user' : 'bot';
+          appendMessage(role, entry.message || '');
+        });
+      } catch (err) {
+        console.error('会話履歴の取得に失敗しました:', err);
+      }
+    }
+
+    async function refreshSummary({ showLoading = false } = {}) {
+      if (showLoading) {
+        summaryPanel.classList.add('loading');
+        summaryContent.textContent = '要約を更新しています…';
+      }
+      try {
+        const res = await fetch('/conversation_summary');
+        if (!res.ok) throw new Error('failed to summarize');
+        const data = await res.json();
+        if (data.summary) {
+          summaryContent.textContent = data.summary;
+        } else if (data.error) {
+          summaryContent.textContent = '要約の取得に失敗しました: ' + data.error;
+        } else {
+          summaryContent.textContent = DEFAULT_SUMMARY_TEXT;
+        }
+      } catch (err) {
+        console.error('要約の取得に失敗しました:', err);
+        summaryContent.textContent = '要約の取得中にエラーが発生しました。';
+      } finally {
+        summaryPanel.classList.remove('loading');
+      }
+    }
+
+    fetchHistory();
+    refreshSummary({ showLoading: true });
 
     form.addEventListener('submit', async e => {
       e.preventDefault();
@@ -203,6 +282,7 @@
         });
         const { answer } = await res.json();
         replaceSpinnerMessage(placeholder, answer);
+        await refreshSummary();
       } catch (err) {
         replaceSpinnerMessage(placeholder, 'エラー: ' + err.message);
       }
@@ -213,7 +293,11 @@
       try {
         const res = await fetch('/reset_history', { method: 'POST' });
         const { status } = await res.json();
-        if (status) chatBox.innerHTML = '';
+        if (status) {
+          chatBox.innerHTML = '';
+          summaryContent.textContent = DEFAULT_SUMMARY_TEXT;
+          await refreshSummary({ showLoading: true });
+        }
         else alert('リセットに失敗しました。');
       } catch (err) {
         alert('リセット中にエラー: ' + err.message);
@@ -225,7 +309,8 @@
       m.className = 'message ' + sender;
       const t = document.createElement('div');
       t.className = 'text';
-      t.textContent = text;
+      if (sender === 'bot') t.innerHTML = text;
+      else t.textContent = text;
       m.appendChild(t);
       chatBox.appendChild(m);
       chatBox.scrollTop = chatBox.scrollHeight;
