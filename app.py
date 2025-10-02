@@ -1,5 +1,8 @@
 # flask_app.py
 from flask import Flask, request, jsonify, render_template
+
+from flask_cors import CORS
+
 import os
 import logging
 from dotenv import load_dotenv
@@ -14,6 +17,7 @@ app.secret_key = os.getenv("SECRET_KEY", "default_secret_key")
 logging.basicConfig(level=logging.DEBUG)
 
 
+
 @app.after_request
 def add_cors_headers(response):
     """Allow all domains to access the API without altering existing logic."""
@@ -25,6 +29,7 @@ def add_cors_headers(response):
     else:
         response.headers.setdefault("Access-Control-Allow-Headers", "Content-Type")
     return response
+
 
 
 @app.route("/rag_answer", methods=["POST"])
@@ -51,8 +56,9 @@ def reset_history():
 
 @app.route("/conversation_history", methods=["GET"])
 def conversation_history():
-    """現在の会話履歴を取得"""
+
     history = ai_engine.load_conversation_history()
+
     return jsonify({"conversation_history": history})
 
 
