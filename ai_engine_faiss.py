@@ -93,6 +93,11 @@ def save_conversation_history(hist):
         logging.exception(f"履歴の保存エラー: {e}")
 
 
+def get_conversation_history():
+    """会話履歴を外部に提供するためのラッパー"""
+    return load_conversation_history()
+
+
 # ── プロンプト ──
 COMBINE_PROMPT = """あなたは、資料を基にユーザーの問いに対してサポートするためのアシスタントです。
 
