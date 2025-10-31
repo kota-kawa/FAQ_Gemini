@@ -6,12 +6,20 @@ from dotenv import load_dotenv
 # .envファイルから環境変数を読み込み（必要なら）
 load_dotenv()
 
+# Gemini API キーの設定
+api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY") or os.getenv("OPENAI_API_KEY")
+if not api_key:
+    raise EnvironmentError("Gemini/OpenAI API key is not set. Please define GOOGLE_API_KEY, GEMINI_API_KEY, or OPENAI_API_KEY in your environment.")
+
+os.environ.setdefault("OPENAI_API_KEY", api_key)
+base_url = os.getenv("OPENAI_BASE_URL") or os.getenv("OPENAI_API_BASE") or "https://generativelanguage.googleapis.com/v1beta/openai/"
+os.environ.setdefault("OPENAI_API_BASE", base_url)
+
 # LlamaIndex の主要モジュール
 from llama_index.core import Document, Settings, PromptHelper
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 
-# 修正：GoogleGenAI -> GoogleGenerativeAI に変更
-from langchain_google_genai import GoogleGenerativeAI
+from langchain_openai import ChatOpenAI
 
 # PDFファイルが配置されるディレクトリと、インデックスの永続化先ディレクトリ
 PDF_DIR = "./static/sample_FAQ_pdf"
@@ -56,14 +64,13 @@ def process_pdf(pdf_path: str) -> list[Document]:
         return []
 
 # LLM のインスタンスを生成し、Settings に直接設定する（例: GoogleGenerativeAIを使用）
-llm = GoogleGenerativeAI(model="gemini-2.0-flash")
+llm = ChatOpenAI(model="gemini-2.0-flash")
 Settings.llm = llm
 
 # PromptHelper の初期化（(max_tokens, chunk_size, chunk_overlap_ratio) の順）
 prompt_helper = PromptHelper(4096, CHUNK_SIZE, CHUNK_OVERLAP / CHUNK_SIZE)
 
 # 埋め込みモデルは、ここでは HuggingFaceEmbedding を使用（OPENAI_API_KEY は不要）
-from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 embed_model = HuggingFaceEmbedding(model_name='intfloat/multilingual-e5-large')
 #embed_model = HuggingFaceEmbedding(model_name='sentence-transformers/all-mpnet-base-v2')
 #embed_model = HuggingFaceEmbedding(model_name='sentence-transformers/stsb-xlm-r-multilingual')
