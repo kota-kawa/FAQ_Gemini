@@ -12,6 +12,7 @@ docx_to_qa_jsonl_thinking.py
 * パースの堅牢化（配列, {"pairs":[...]}, ```json ブロック```, Q: / A: 形式）
 * モデルが flash 系なら自動で gemini-2.5-pro に切替（thinking 対応のため）
 * 先頭200文字のデバッグ出力（最初の失敗のみ）
+* **ステートファイル機能を完全無効化（./state を読み書きしない）**
 """
 
 import os
@@ -19,7 +20,6 @@ import re
 import sys
 import json
 import time
-import glob
 import random
 from dataclasses import dataclass
 from typing import List, Dict, Any, Optional, Set, Tuple
@@ -314,6 +314,9 @@ class ChatClient:
 # =========================
 
 def load_existing_questions(jsonl_path: str) -> Set[str]:
+    """
+    既存 JSONL の重複排除用。ステート無効でも、重複Qの多重書き込みは避ける。
+    """
     seen: Set[str] = set()
     if not os.path.exists(jsonl_path):
         return seen
@@ -353,30 +356,7 @@ def append_jsonl(jsonl_path: str, qa_list: List[Dict[str, str]], seen: Set[str])
     return wrote
 
 # =========================
-# ステート（途中再開）
-# =========================
-
-@dataclass
-class State:
-    processed: Set[int]
-
-def load_state(state_path: str) -> State:
-    if not os.path.exists(state_path):
-        return State(processed=set())
-    try:
-        with open(state_path, "r", encoding="utf-8") as f:
-            obj = json.load(f)
-        return State(processed=set(obj.get("processed", [])))
-    except Exception:
-        return State(processed=set())
-
-def save_state(state_path: str, state: State) -> None:
-    ensure_parent_dir(state_path)
-    with open(state_path, "w", encoding="utf-8") as f:
-        json.dump({"processed": sorted(list(state.processed))}, f, ensure_ascii=False, indent=2)
-
-# =========================
-# 単一ファイル処理
+# 単一ファイル処理（ステートなし）
 # =========================
 
 def process_docx_to_jsonl(
@@ -386,7 +366,6 @@ def process_docx_to_jsonl(
     chunk_chars: int = 5000,
     chunk_overlap: int = 400,
     workers: int = 2,
-    state_path: Optional[str] = None,
 ) -> None:
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -401,56 +380,48 @@ def process_docx_to_jsonl(
         return
 
     ensure_parent_dir(out_jsonl)
-    if state_path:
-        ensure_parent_dir(state_path)
 
     seen = load_existing_questions(out_jsonl)
     if seen:
         print(f"Loaded {len(seen)} existing Qs from {out_jsonl}")
 
     client = ChatClient(settings)
-    state = load_state(state_path) if state_path else State(processed=set())
-    pending = [i for i in range(len(chunks)) if i not in state.processed]
+    indices = list(range(len(chunks)))
 
     def task(idx: int) -> Tuple[int, List[Dict[str, str]]]:
         qa = client.qa_from_chunk(chunks[idx], debug_tag=f"{Path(in_docx).name}#{idx}")
         return idx, qa
 
-    with ThreadPoolExecutor(max_workers=max(1, workers)) as ex, tqdm(total=len(pending), desc="Chunks") as pbar:
-        futmap = {ex.submit(task, i): i for i in pending}
+    with ThreadPoolExecutor(max_workers=max(1, workers)) as ex, tqdm(total=len(indices), desc="Chunks") as pbar:
+        futmap = {ex.submit(task, i): i for i in indices}
         for fut in as_completed(futmap):
             idx = futmap[fut]
             try:
                 _, qa_list = fut.result()
             except Exception as e:
+                # ステートなし: エラーでもスキップのみ。再実行すると再トライされる。
                 print(f"[Chunk {idx}] ERROR: {e}", file=sys.stderr)
-                state.processed.add(idx)
-                save_state(state_path, state)
                 pbar.update(1)
                 continue
 
             wrote = append_jsonl(out_jsonl, qa_list, seen)
-            state.processed.add(idx)
-            save_state(state_path, state)
             pbar.update(1)
             tqdm.write(f"[Chunk {idx}] wrote {wrote} Q/A")
 
     print("Done.")
 
 # =========================
-# メイン（ディレクトリ一括）
+# メイン（ディレクトリ一括・ステートなし）
 # =========================
 
 def main():
     # ハードコード + 環境変数で上書き可
     load_dotenv()
 
-    INPUT_DIR = Path(os.getenv("DOCX_IN_DIR", "./civil-law")).resolve()
+    INPUT_DIR = Path(os.getenv("DOCX_IN_DIR", "./home-topic")).resolve()
     OUTPUT_DIR = Path(os.getenv("JSONL_OUT_DIR", "./output_jsonl")).resolve()
-    STATE_DIR = Path(os.getenv("STATE_DIR", "./state")).resolve()
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    STATE_DIR.mkdir(parents=True, exist_ok=True)
 
     api_key = os.getenv("GEMINI_API_KEY") or os.getenv("OPENAI_API_KEY") or ""
     if not api_key:
@@ -484,12 +455,11 @@ def main():
     print(f"[Start] Converting {len(docs)} file(s)")
     print(f"  INPUT_DIR = {INPUT_DIR}")
     print(f"  OUTPUT_DIR = {OUTPUT_DIR}")
-    print(f"  STATE_DIR  = {STATE_DIR}")
     print(f"  Model={settings.model} BaseURL={settings.base_url} ReasoningEffort=high")
+    print(f"  State=disabled (no resume; every run reprocesses all chunks)")
 
     for docx_path in docs:
         out_path = OUTPUT_DIR / f"{docx_path.stem}.jsonl"
-        state_path = STATE_DIR / f"{docx_path.stem}_state.json"
 
         print(f"\n[File] {docx_path.name} -> {out_path.name}")
         try:
@@ -500,7 +470,6 @@ def main():
                 chunk_chars=5000,
                 chunk_overlap=400,
                 workers=2,
-                state_path=str(state_path),
             )
         except Exception as e:
             print(f"[Error] {docx_path.name}: {e}", file=sys.stderr)

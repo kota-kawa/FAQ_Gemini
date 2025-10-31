@@ -23,7 +23,7 @@ logging.basicConfig(level=logging.DEBUG)
 llm = ChatOpenAI(model="gemini-2.5-flash")
 
 # ── インデックス設定 ──
-INDEX_DB_DIR = "./constitution_vector_db"
+INDEX_DB_DIR = "./home-topic-vdb"
 HISTORY_FILE = "conversation_history.json"
 EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "intfloat/multilingual-e5-large")
 EMBEDDING_DEVICE = os.getenv("EMBEDDING_DEVICE", "cpu")
@@ -35,7 +35,7 @@ embeddings = HuggingFaceEmbeddings(
 
 
 def load_all_indices():
-    """./constitution_vector_db 以下を走査し、FAISS のインデックスを読み込む"""
+    """./home-topic-vdb 以下を走査し、FAISS のインデックスを読み込む"""
     if not os.path.exists(INDEX_DB_DIR):
         raise RuntimeError(f"Directory not found: {INDEX_DB_DIR}")
 

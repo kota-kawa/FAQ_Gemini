@@ -8,8 +8,8 @@ from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 
 # JSONL ファイルが配置されるディレクトリと、インデックスの永続化先ディレクトリ
-JSONL_DIR = "./docx_to_qa/jsonl"
-INDEX_DB_DIR = "./constitution_vector_db"
+JSONL_DIR = "./docx_to_qa/output_jsonl"
+INDEX_DB_DIR = "./home-topic-vdb"
 os.makedirs(INDEX_DB_DIR, exist_ok=True)
 
 EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "intfloat/multilingual-e5-large")
