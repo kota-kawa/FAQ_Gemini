@@ -432,23 +432,29 @@ class AgentRegistry:
         """
         task_lower = task_description.lower()
         
-        # IoT関連のキーワード
-        iot_keywords = ["デバイス", "センサー", "温度", "照明", "エアコン", 
-                        "iot", "device", "sensor", "light", "温度計"]
-        if any(keyword in task_lower for keyword in iot_keywords):
-            return self._agents[AgentType.IOT]
-        
-        # ブラウザ関連のキーワード
+        # ブラウザ関連のキーワード（優先度高）
         browser_keywords = ["検索", "ウェブ", "web", "ブラウザ", "サイト", 
-                           "ページ", "google", "amazon", "情報を調べ"]
+                           "ページ", "google", "amazon", "情報を調べ", "yahoo"]
         if any(keyword in task_lower for keyword in browser_keywords):
             return self._agents[AgentType.BROWSER]
         
-        # FAQ/知識ベース関連のキーワード
+        # FAQ/知識ベース関連のキーワード（優先度中）
         faq_keywords = ["使い方", "方法", "教えて", "どうやって", "トラブル",
-                       "エラー", "説明書", "マニュアル"]
+                       "エラー", "説明書", "マニュアル", "について", "とは"]
         if any(keyword in task_lower for keyword in faq_keywords):
             return self._agents[AgentType.FAQ]
+        
+        # IoT関連のキーワード（優先度低、操作を伴う場合）
+        iot_action_keywords = ["設定", "つけて", "消して", "オン", "オフ", 
+                              "制御", "動かし", "止めて", "on", "off"]
+        iot_device_keywords = ["デバイス", "センサー", "温度", "照明",
+                              "iot", "device", "sensor", "light", "温度計"]
+        
+        has_action = any(keyword in task_lower for keyword in iot_action_keywords)
+        has_device = any(keyword in task_lower for keyword in iot_device_keywords)
+        
+        if has_action or has_device:
+            return self._agents[AgentType.IOT]
         
         # デフォルトはFAQエージェント
         return self._agents[AgentType.FAQ]
