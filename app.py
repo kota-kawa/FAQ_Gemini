@@ -67,7 +67,94 @@ def conversation_summary():
         return jsonify({"summary": summary})
     except Exception as e:
         app.logger.exception("Error during conversation summarization:")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "会話の要約中にエラーが発生しました"}), 500
+
+
+@app.route("/analyze_conversation", methods=["POST"])
+def analyze_conversation():
+    """
+    外部エージェントから会話履歴を受け取り、VDBの知識で解決できる問題があれば支援メッセージを返す。
+    
+    リクエスト形式:
+    {
+        "conversation_history": [
+            {"role": "User", "message": "..."},
+            {"role": "AI", "message": "..."}
+        ]
+    }
+    
+    レスポンス形式:
+    {
+        "analyzed": true,
+        "needs_help": true/false,
+        "problem": "特定された問題" (needs_helpがtrueの場合),
+        "support_message": "支援メッセージ" (needs_helpがtrueの場合),
+        "sources": [...] (needs_helpがtrueの場合)
+    }
+    """
+    try:
+        data = request.get_json()
+    except Exception as e:
+        app.logger.exception("Error parsing JSON:")
+        return jsonify({"error": "無効なJSON形式です"}), 400
+    
+    if data is None:
+        return jsonify({"error": "リクエストボディが必要です"}), 400
+    
+    conversation_history = data.get("conversation_history", [])
+    
+    if not conversation_history:
+        return jsonify({"error": "会話履歴が空です"}), 400
+    
+    if not isinstance(conversation_history, list):
+        return jsonify({"error": "conversation_historyはリスト形式で送信してください"}), 400
+    
+    try:
+        # 会話履歴を分析
+        analysis = ai_engine.analyze_external_conversation(conversation_history)
+        
+        response = {
+            "analyzed": True,
+            "needs_help": analysis.get("needs_help", False)
+        }
+        
+        # エラーがあればログに記録するが、レスポンスには含めない（セキュリティのため）
+        if "error" in analysis:
+            app.logger.warning(f"Analysis error: {analysis['error']}")
+        
+        # 支援が必要な場合、VDBから回答を取得
+        if analysis.get("needs_help"):
+            # LLMからの出力を安全に取得（例外情報は含まれない）
+            problem = analysis.get("problem", "")
+            question = analysis.get("question", "")
+            
+            # 安全性のため、problemとquestionが文字列であることを確認
+            if not isinstance(problem, str):
+                problem = ""
+            if not isinstance(question, str):
+                question = ""
+            
+            response["problem"] = problem
+            
+            if question:
+                # 既存のRAGロジックを使用して回答を生成
+                try:
+                    answer, sources = ai_engine.get_answer(question)
+                    response["support_message"] = answer
+                    response["sources"] = sources
+                except Exception:
+                    app.logger.exception("Error getting answer from VDB:")
+                    response["support_message"] = "回答の取得中にエラーが発生しました。"
+                    response["sources"] = []
+            else:
+                response["support_message"] = "問題は特定されましたが、具体的な質問が生成されませんでした。"
+                response["sources"] = []
+        
+        return jsonify(response)
+        
+    except Exception as e:
+        app.logger.exception("Error during conversation analysis:")
+        return jsonify({"error": "会話の分析中にエラーが発生しました"}), 500
 
 
 @app.route("/")
