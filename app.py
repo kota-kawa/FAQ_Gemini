@@ -7,6 +7,8 @@ import os
 import logging
 from dotenv import load_dotenv
 
+from external_agents import AgentDelegator, AgentDispatchError
+
 #import ai_engine  # AI/RAG ロジックをまとめた別モジュール
 import ai_engine_faiss as ai_engine
 
@@ -15,6 +17,9 @@ load_dotenv()
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "default_secret_key")
 logging.basicConfig(level=logging.DEBUG)
+
+
+agent_delegator = AgentDelegator()
 
 
 
@@ -60,6 +65,88 @@ def agent_rag_answer():
     except Exception as e:
         app.logger.exception("Error during external agent query processing:")
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/delegate_agent_help", methods=["POST"])
+def delegate_agent_help():
+    """Forward a help request to the most suitable external agent."""
+
+    data = request.get_json(silent=True) or {}
+
+    request_text = ""
+    for key in ("question", "prompt", "request", "message", "instruction"):
+        raw_value = data.get(key)
+        if isinstance(raw_value, str) and raw_value.strip():
+            request_text = raw_value.strip()
+            break
+
+    if not request_text:
+        return jsonify({"error": "問い合わせ内容を入力してください。"}), 400
+
+    hint_raw = data.get("agent_hint") or data.get("agent") or data.get("target_agent")
+    hint = hint_raw.strip() if isinstance(hint_raw, str) else None
+
+    metadata_raw = data.get("metadata")
+    if metadata_raw is not None and not isinstance(metadata_raw, dict):
+        return jsonify({"error": "metadata はオブジェクト形式で指定してください。"}), 400
+
+    supplemental_context = data.get("context") or data.get("supplemental_context")
+    if supplemental_context is not None and not isinstance(supplemental_context, str):
+        return jsonify({"error": "context は文字列で指定してください。"}), 400
+
+    try:
+        delegation = agent_delegator.delegate_help_request(
+            request_text,
+            hint=hint,
+            metadata=metadata_raw if isinstance(metadata_raw, dict) else None,
+            supplemental_context=supplemental_context,
+        )
+    except AgentDispatchError as exc:
+        response = {"error": str(exc)}
+        if exc.details:
+            response["details"] = exc.details
+        return jsonify(response), 502
+    except Exception:
+        app.logger.exception("Unexpected error during external agent delegation:")
+        return (
+            jsonify({"error": "外部エージェントへの問い合わせ中にエラーが発生しました。"}),
+            500,
+        )
+
+    return jsonify(delegation)
+
+
+@app.route("/delegate_agent_conversation", methods=["POST"])
+def delegate_agent_conversation():
+    """Send a conversation log to an external agent's review endpoint."""
+
+    data = request.get_json(silent=True) or {}
+    history = data.get("conversation_history") or data.get("history")
+
+    if history is None:
+        return jsonify({"error": "conversation_history を指定してください。"}), 400
+
+    if not isinstance(history, list):
+        return jsonify({"error": "conversation_history はリスト形式で指定してください。"}), 400
+
+    agent_hint = data.get("agent") or data.get("agent_hint")
+    hint = agent_hint.strip() if isinstance(agent_hint, str) else None
+
+    try:
+        delegation = agent_delegator.forward_conversation(history, agent=hint)
+    except AgentDispatchError as exc:
+        response = {"error": str(exc)}
+        if exc.details:
+            response["details"] = exc.details
+        return jsonify(response), 502
+    except Exception:
+        app.logger.exception("Unexpected error during conversation delegation:")
+        return (
+            jsonify({"error": "外部エージェントへの会話転送中にエラーが発生しました。"}),
+            500,
+        )
+
+    return jsonify(delegation)
 
 
 @app.route("/reset_history", methods=["POST"])
@@ -161,6 +248,22 @@ def analyze_conversation():
                     app.logger.exception("Error getting answer from VDB:")
                     response["support_message"] = "回答の取得中にエラーが発生しました。"
                     response["sources"] = []
+
+                # 専門エージェントにも同じ質問を委譲する
+                try:
+                    delegation = agent_delegator.delegate_help_request(
+                        question,
+                        supplemental_context=problem or None,
+                    )
+                    response["agent_delegation"] = delegation
+                except AgentDispatchError as exc:
+                    app.logger.warning("Agent delegation failed: %s", exc)
+                    response["agent_delegation_error"] = str(exc)
+                    if exc.details:
+                        response["agent_delegation_details"] = exc.details
+                except Exception:
+                    app.logger.exception("Unexpected error during agent delegation:")
+                    response["agent_delegation_error"] = "外部エージェントへの委譲に失敗しました。"
             else:
                 response["support_message"] = "問題は特定されましたが、具体的な質問が生成されませんでした。"
                 response["sources"] = []
