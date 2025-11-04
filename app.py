@@ -67,7 +67,7 @@ def conversation_summary():
         return jsonify({"summary": summary})
     except Exception as e:
         app.logger.exception("Error during conversation summarization:")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "会話の要約中にエラーが発生しました"}), 500
 
 
 @app.route("/analyze_conversation", methods=["POST"])
@@ -140,7 +140,7 @@ def analyze_conversation():
         
     except Exception as e:
         app.logger.exception("Error during conversation analysis:")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "会話の分析中にエラーが発生しました"}), 500
 
 
 @app.route("/")
