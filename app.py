@@ -70,6 +70,71 @@ def conversation_summary():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/analyze_conversation", methods=["POST"])
+def analyze_conversation():
+    """
+    外部エージェントから会話履歴を受け取り、VDBの知識で解決できる問題があれば支援メッセージを返す。
+    
+    リクエスト形式:
+    {
+        "conversation_history": [
+            {"role": "User", "message": "..."},
+            {"role": "AI", "message": "..."}
+        ]
+    }
+    
+    レスポンス形式:
+    {
+        "analyzed": true,
+        "needs_help": true/false,
+        "problem": "特定された問題" (needs_helpがtrueの場合),
+        "support_message": "支援メッセージ" (needs_helpがtrueの場合),
+        "sources": [...] (needs_helpがtrueの場合)
+    }
+    """
+    data = request.get_json() or {}
+    conversation_history = data.get("conversation_history", [])
+    
+    if not conversation_history:
+        return jsonify({"error": "会話履歴が空です"}), 400
+    
+    if not isinstance(conversation_history, list):
+        return jsonify({"error": "conversation_historyはリスト形式で送信してください"}), 400
+    
+    try:
+        # 会話履歴を分析
+        analysis = ai_engine.analyze_external_conversation(conversation_history)
+        
+        response = {
+            "analyzed": True,
+            "needs_help": analysis.get("needs_help", False)
+        }
+        
+        # エラーがあれば含める
+        if "error" in analysis:
+            response["error"] = analysis["error"]
+        
+        # 支援が必要な場合、VDBから回答を取得
+        if analysis.get("needs_help"):
+            response["problem"] = analysis.get("problem", "")
+            question = analysis.get("question", "")
+            
+            if question:
+                # 既存のRAGロジックを使用して回答を生成
+                answer, sources = ai_engine.get_answer(question)
+                response["support_message"] = answer
+                response["sources"] = sources
+            else:
+                response["support_message"] = "問題は特定されましたが、具体的な質問が生成されませんでした。"
+                response["sources"] = []
+        
+        return jsonify(response)
+        
+    except Exception as e:
+        app.logger.exception("Error during conversation analysis:")
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/")
 def index():
     """トップページ（テンプレートは従来どおり）"""

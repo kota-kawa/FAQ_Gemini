@@ -246,3 +246,80 @@ def summarize_conversation(history: List[dict]) -> str:
 def get_conversation_summary() -> str:
     history = load_conversation_history()
     return summarize_conversation(history)
+
+
+# ── 外部会話履歴の分析 ──
+ANALYZE_CONVERSATION_PROMPT = """あなたは会話履歴を分析し、家庭科の知識（料理、洗濯、掃除、栄養、育児、家計管理など）で解決できる問題があるかを判断するアシスタントです。
+
+【会話履歴】
+{conversation_history}
+
+【分析ルール】
+- 会話履歴を読み、何か問題や質問が発生していないかを確認してください。
+- もし家庭科の知識（料理、洗濯、掃除、栄養、育児、家計管理、衣服の手入れ、食材の保存方法など）を使って解決できそうな問題がある場合、その問題を特定してください。
+- 問題がない場合、または家庭科の知識では解決できない場合は、介入不要と判断してください。
+
+【出力形式】
+以下のJSON形式で出力してください：
+{{
+  "needs_help": true または false,
+  "problem": "特定された問題の説明（needs_helpがtrueの場合のみ）",
+  "question": "VDBに問い合わせる具体的な質問文（needs_helpがtrueの場合のみ）"
+}}
+
+重要：必ずJSON形式のみで回答してください。説明文は含めないでください。
+"""
+
+
+def analyze_external_conversation(conversation_history: List[dict]) -> dict:
+    """
+    外部から送られてきた会話履歴を分析し、VDBの知識で解決できる問題があるかを判断する。
+    
+    Args:
+        conversation_history: 会話履歴のリスト [{"role": "User"/"AI", "message": "..."}]
+    
+    Returns:
+        {
+            "needs_help": bool,
+            "problem": str (optional),
+            "question": str (optional)
+        }
+    """
+    if not conversation_history:
+        return {"needs_help": False}
+    
+    # 会話履歴をフォーマット
+    formatted_history = "\n".join(
+        f"{entry.get('role', 'Unknown')}: {entry.get('message', '')}"
+        for entry in conversation_history
+    )
+    
+    prompt_text = ANALYZE_CONVERSATION_PROMPT.format(
+        conversation_history=formatted_history
+    )
+    
+    try:
+        response = llm.invoke(prompt_text)
+        if isinstance(response, str):
+            response_text = response
+        else:
+            response_text = getattr(response, "content", None) or getattr(response, "text", None) or str(response)
+        
+        # JSONの抽出（```json ``` で囲まれている可能性がある）
+        response_text = response_text.strip()
+        if response_text.startswith("```json"):
+            response_text = response_text[7:]
+        if response_text.startswith("```"):
+            response_text = response_text[3:]
+        if response_text.endswith("```"):
+            response_text = response_text[:-3]
+        response_text = response_text.strip()
+        
+        result = json.loads(response_text)
+        return result
+    except json.JSONDecodeError as e:
+        logging.exception(f"JSON解析エラー: {e}, レスポンス: {response_text}")
+        return {"needs_help": False, "error": "JSON解析に失敗しました"}
+    except Exception as e:
+        logging.exception(f"会話分析エラー: {e}")
+        return {"needs_help": False, "error": str(e)}
