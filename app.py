@@ -47,6 +47,21 @@ def rag_answer():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/agent_rag_answer", methods=["POST"])
+def agent_rag_answer():
+    """他エージェントからの問い合わせに応答するが、会話履歴には保存しない"""
+    data = request.get_json() or {}
+    question = data.get("question", "").strip()
+    if not question:
+        return jsonify({"error": "質問を入力してください"}), 400
+    try:
+        answer, sources = ai_engine.get_answer(question, persist_history=False)
+        return jsonify({"answer": answer, "sources": sources})
+    except Exception as e:
+        app.logger.exception("Error during external agent query processing:")
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/reset_history", methods=["POST"])
 def reset_history():
     """会話履歴をリセット"""

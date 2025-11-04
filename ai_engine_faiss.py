@@ -135,7 +135,7 @@ def _format_history_for_prompt(history: List[dict]) -> str:
     return "\n".join(f"{entry['role']}: {entry['message']}" for entry in recent)
 
 
-def get_answer(question: str):
+def get_answer(question: str, persist_history: bool = True):
     """質問文字列を受け取り、RAG 結果（answer, sources）を返す"""
     if vector_retriever is None:
         raise RuntimeError("FAISS インデックスが初期化されていません。")
@@ -145,7 +145,6 @@ def get_answer(question: str):
         raise ValueError("質問を入力してください。")
 
     history = load_conversation_history()
-    history.append({"role": "User", "message": question})
 
     retrieved_docs = vector_retriever.get_relevant_documents(question)
 
@@ -169,7 +168,7 @@ def get_answer(question: str):
         summaries_text = "該当資料は見つかりませんでした。資料が不足する場合はその旨を伝えつつ、一般的な知識で補足してください。"
 
     prompt_text = COMBINE_PROMPT.format(
-        history=_format_history_for_prompt(history[:-1]),
+        history=_format_history_for_prompt(history),
         question=question,
         summaries=summaries_text,
     )
@@ -196,8 +195,12 @@ def get_answer(question: str):
     else:
         final = answer
 
-    history.append({"role": "AI", "message": final})
-    save_conversation_history(history)
+    if persist_history:
+        updated_history = history + [
+            {"role": "User", "message": question},
+            {"role": "AI", "message": final},
+        ]
+        save_conversation_history(updated_history)
 
     return final, list(ref_dict.keys())
 
