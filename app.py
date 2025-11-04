@@ -124,8 +124,17 @@ def analyze_conversation():
         
         # 支援が必要な場合、VDBから回答を取得
         if analysis.get("needs_help"):
-            response["problem"] = analysis.get("problem", "")
+            # LLMからの出力を安全に取得（例外情報は含まれない）
+            problem = analysis.get("problem", "")
             question = analysis.get("question", "")
+            
+            # 安全性のため、problemとquestionが文字列であることを確認
+            if not isinstance(problem, str):
+                problem = ""
+            if not isinstance(question, str):
+                question = ""
+            
+            response["problem"] = problem
             
             if question:
                 # 既存のRAGロジックを使用して回答を生成
