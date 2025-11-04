@@ -129,9 +129,14 @@ def analyze_conversation():
             
             if question:
                 # 既存のRAGロジックを使用して回答を生成
-                answer, sources = ai_engine.get_answer(question)
-                response["support_message"] = answer
-                response["sources"] = sources
+                try:
+                    answer, sources = ai_engine.get_answer(question)
+                    response["support_message"] = answer
+                    response["sources"] = sources
+                except Exception:
+                    app.logger.exception("Error getting answer from VDB:")
+                    response["support_message"] = "回答の取得中にエラーが発生しました。"
+                    response["sources"] = []
             else:
                 response["support_message"] = "問題は特定されましたが、具体的な質問が生成されませんでした。"
                 response["sources"] = []
