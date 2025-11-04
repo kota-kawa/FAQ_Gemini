@@ -331,8 +331,8 @@ def analyze_external_conversation(conversation_history: List[dict]) -> dict:
         result = json.loads(response_text)
         return result
     except json.JSONDecodeError as e:
-        logging.exception(f"JSON解析エラー: {e}, レスポンス: {response_text}")
+        logging.error("JSON解析エラー: LLMの出力がJSON形式ではありません")
         return {"needs_help": False, "error": "JSON解析に失敗しました"}
     except Exception as e:
-        logging.exception(f"会話分析エラー: {e}")
-        return {"needs_help": False, "error": str(e)}
+        logging.error("会話分析エラーが発生しました")
+        return {"needs_help": False, "error": "会話分析エラー"}
