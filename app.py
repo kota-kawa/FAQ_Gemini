@@ -118,9 +118,9 @@ def analyze_conversation():
             "needs_help": analysis.get("needs_help", False)
         }
         
-        # エラーがあれば含める
+        # エラーがあればログに記録するが、レスポンスには含めない（セキュリティのため）
         if "error" in analysis:
-            response["error"] = analysis["error"]
+            app.logger.warning(f"Analysis error: {analysis['error']}")
         
         # 支援が必要な場合、VDBから回答を取得
         if analysis.get("needs_help"):
