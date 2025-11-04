@@ -288,10 +288,21 @@ def analyze_external_conversation(conversation_history: List[dict]) -> dict:
     if not conversation_history:
         return {"needs_help": False}
     
-    # 会話履歴をフォーマット
+    # 会話履歴の検証とフォーマット
+    validated_entries = []
+    for entry in conversation_history:
+        if not isinstance(entry, dict):
+            continue
+        if 'role' not in entry or 'message' not in entry:
+            continue
+        validated_entries.append(entry)
+    
+    if not validated_entries:
+        return {"needs_help": False}
+    
     formatted_history = "\n".join(
-        f"{entry.get('role', 'Unknown')}: {entry.get('message', '')}"
-        for entry in conversation_history
+        f"{entry['role']}: {entry['message']}"
+        for entry in validated_entries
     )
     
     prompt_text = ANALYZE_CONVERSATION_PROMPT.format(
@@ -309,10 +320,12 @@ def analyze_external_conversation(conversation_history: List[dict]) -> dict:
         response_text = response_text.strip()
         if response_text.startswith("```json"):
             response_text = response_text[7:]
-        if response_text.startswith("```"):
+            if response_text.endswith("```"):
+                response_text = response_text[:-3]
+        elif response_text.startswith("```"):
             response_text = response_text[3:]
-        if response_text.endswith("```"):
-            response_text = response_text[:-3]
+            if response_text.endswith("```"):
+                response_text = response_text[:-3]
         response_text = response_text.strip()
         
         result = json.loads(response_text)

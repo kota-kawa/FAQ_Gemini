@@ -92,7 +92,15 @@ def analyze_conversation():
         "sources": [...] (needs_helpがtrueの場合)
     }
     """
-    data = request.get_json() or {}
+    try:
+        data = request.get_json()
+    except Exception as e:
+        app.logger.exception("Error parsing JSON:")
+        return jsonify({"error": "無効なJSON形式です"}), 400
+    
+    if data is None:
+        return jsonify({"error": "リクエストボディが必要です"}), 400
+    
     conversation_history = data.get("conversation_history", [])
     
     if not conversation_history:
