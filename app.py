@@ -158,21 +158,6 @@ def analyze_conversation():
                     response["support_message"] = "回答の取得中にエラーが発生しました。"
                     response["sources"] = []
 
-                # 専門エージェントにも同じ質問を委譲する
-                try:
-                    delegation = agent_delegator.delegate_help_request(
-                        question,
-                        supplemental_context=problem or None,
-                    )
-                    response["agent_delegation"] = delegation
-                except AgentDispatchError as exc:
-                    app.logger.warning("Agent delegation failed: %s", exc)
-                    response["agent_delegation_error"] = str(exc)
-                    if exc.details:
-                        response["agent_delegation_details"] = exc.details
-                except Exception:
-                    app.logger.exception("Unexpected error during agent delegation:")
-                    response["agent_delegation_error"] = "外部エージェントへの委譲に失敗しました。"
             else:
                 response["support_message"] = "問題は特定されましたが、具体的な質問が生成されませんでした。"
                 response["sources"] = []
