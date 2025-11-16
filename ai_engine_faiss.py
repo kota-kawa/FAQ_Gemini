@@ -1,6 +1,7 @@
 import os
 import json
 import logging
+from datetime import datetime
 from typing import List, Optional
 from dotenv import load_dotenv
 
@@ -32,6 +33,11 @@ embeddings = HuggingFaceEmbeddings(
     model_name=EMBEDDING_MODEL_NAME,
     model_kwargs={"device": EMBEDDING_DEVICE},
 )
+
+
+def _current_datetime_line() -> str:
+    """Return the timestamp string embedded in prompts."""
+    return datetime.now().strftime("現在の日時ー%Y年%m月%d日%H時%M分")
 
 
 def load_all_indices():
@@ -106,7 +112,9 @@ def get_conversation_history():
 
 
 # ── プロンプト ──
-COMBINE_PROMPT = """あなたは、資料を基にユーザーの問いに対してサポートするためのアシスタントです。
+COMBINE_PROMPT = """現在の日時ー{current_datetime}
+
+あなたは、資料を基にユーザーの問いに対してサポートするためのアシスタントです。
 
 【会話履歴】
 {history}
@@ -168,6 +176,7 @@ def get_answer(question: str, persist_history: bool = True):
         summaries_text = "該当資料は見つかりませんでした。資料が不足する場合はその旨を伝えつつ、一般的な知識で補足してください。"
 
     prompt_text = COMBINE_PROMPT.format(
+        current_datetime=_current_datetime_line(),
         history=_format_history_for_prompt(history),
         question=question,
         summaries=summaries_text,

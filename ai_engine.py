@@ -1,6 +1,7 @@
 import os
 import json
 import logging
+from datetime import datetime
 from dotenv import load_dotenv
 
 # llama_index 関連
@@ -47,6 +48,11 @@ embed_model = HuggingFaceEmbedding(model_name="intfloat/multilingual-e5-large")
 Settings.llm = llm
 Settings.embed_model = embed_model
 Settings.prompt_helper = prompt_helper
+
+
+def _current_datetime_line() -> str:
+    """Return the timestamp string embedded in QA system prompts."""
+    return datetime.now().strftime("現在の日時ー%Y年%m月%d日%H時%M分")
 
 # ── インデックス設定 ──
 INDEX_DB_DIR = "./constitution_vector_db"
@@ -110,7 +116,9 @@ def save_conversation_history(hist):
         logging.exception(f"履歴の保存エラー: {e}")
 
 # ── プロンプト ──
-COMBINE_PROMPT = """あなたは、資料を基にユーザーの問いに対してサポートするためのアシスタントです。
+COMBINE_PROMPT = """現在の日時ー{current_datetime}
+
+あなたは、資料を基にユーザーの問いに対してサポートするためのアシスタントです。
 
 以下の回答候補を統合して、最終的な回答を作成してください。  
 【回答候補】  
@@ -156,8 +164,10 @@ def get_answer(question: str):
     query_text = question
     # ──────────────────
 
+    prompt_template = COMBINE_PROMPT.format(current_datetime=_current_datetime_line())
+
     query_engine = graph_or_index.as_query_engine(
-        prompt_template=COMBINE_PROMPT,
+        prompt_template=prompt_template,
         graph_query_kwargs={"top_k": NUM_INDICES},
         child_query_kwargs={
             "similarity_top_k": 5,
