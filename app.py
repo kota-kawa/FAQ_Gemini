@@ -112,7 +112,7 @@ def analyze_conversation():
     if data is None:
         return jsonify({"error": "リクエストボディが必要です"}), 400
     
-    conversation_history = data.get("conversation_history", [])
+    conversation_history = data.get("history") or data.get("conversation_history") or []
     
     if not conversation_history:
         return jsonify({"error": "会話履歴が空です"}), 400
@@ -126,7 +126,10 @@ def analyze_conversation():
         
         response = {
             "analyzed": True,
-            "needs_help": analysis.get("needs_help", False)
+            "needs_help": analysis.get("needs_help", False),
+            "should_reply": bool(analysis.get("should_reply", False)),
+            "reply": analysis.get("reply", "") or "",
+            "addressed_agents": analysis.get("addressed_agents", []) or []
         }
         
         # エラーがあればログに記録するが、レスポンスには含めない（セキュリティのため）
@@ -153,14 +156,23 @@ def analyze_conversation():
                     answer, sources = ai_engine.get_answer(question)
                     response["support_message"] = answer
                     response["sources"] = sources
+                    if not response["reply"]:
+                        response["reply"] = answer
+                        response["should_reply"] = True
                 except Exception:
                     app.logger.exception("Error getting answer from VDB:")
                     response["support_message"] = "回答の取得中にエラーが発生しました。"
                     response["sources"] = []
+                    if not response["reply"]:
+                        response["reply"] = response["support_message"]
+                        response["should_reply"] = True
 
             else:
                 response["support_message"] = "問題は特定されましたが、具体的な質問が生成されませんでした。"
                 response["sources"] = []
+                if not response["reply"]:
+                    response["reply"] = response["support_message"]
+                    response["should_reply"] = True
         
         return jsonify(response)
         

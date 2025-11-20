@@ -261,25 +261,25 @@ def get_conversation_summary() -> str:
 
 
 # ── 外部会話履歴の分析 ──
-ANALYZE_CONVERSATION_PROMPT = """あなたは会話履歴を分析し、家庭科の知識（料理、洗濯、掃除、栄養、育児、家計管理など）で解決できる問題があるかを判断するアシスタントです。
+ANALYZE_CONVERSATION_PROMPT = """あなたは会話履歴を分析し、家庭科の知識（料理、洗濯、掃除、栄養、育児、家計管理など）で解決できる問題があるかを判断し、少しでも役立つなら発言するアシスタントです。Life-Assistant Agent / Browser Agent / IoT Agent といった他エージェントに任せる・呼びかける場合は明示してください。
 
 【会話履歴】
 {conversation_history}
 
 【分析ルール】
-- 会話履歴を読み、何か問題や質問が発生していないかを確認してください。
-- もし家庭科の知識（料理、洗濯、掃除、栄養、育児、家計管理、衣服の手入れ、食材の保存方法など）を使って解決できそうな問題がある場合、その問題を特定してください。
-- 問題がない場合、または家庭科の知識では解決できない場合は、介入不要と判断してください。
+- 家庭科の知識で助けられそうなら `needs_help` を true にし、VDBに投げる具体的な `question` を出してください。
+- 問題がなくても、注意喚起・確認・他エージェントへの依頼など「一言あると良い」と思えば `should_reply` を true にして短く話してください。
+- `addressed_agents` は呼びかけたいエージェント名を配列で記載（例: ["Browser Agent"]）。特に指定がなければ空配列。
 
-【出力形式】
-以下のJSON形式で出力してください：
+【出力形式（必ずJSONのみ）】
 {{
-  "needs_help": true または false,
-  "problem": "特定された問題の説明（needs_helpがtrueの場合のみ）",
-  "question": "VDBに問い合わせる具体的な質問文（needs_helpがtrueの場合のみ）"
+  "should_reply": true/false,
+  "reply": "発言内容。必要なら他エージェントを名指し。",
+  "addressed_agents": ["Browser Agent", "IoT Agent", "Life-Assistant Agent"],
+  "needs_help": true/false,
+  "problem": "特定された問題（needs_helpがtrueの場合）",
+  "question": "VDBに問い合わせる具体的質問（needs_helpがtrueの場合）"
 }}
-
-重要：必ずJSON形式のみで回答してください。説明文は含めないでください。
 """
 
 
@@ -298,19 +298,31 @@ def analyze_external_conversation(conversation_history: List[dict]) -> dict:
         }
     """
     if not conversation_history:
-        return {"needs_help": False}
+        return {
+            "should_reply": False,
+            "reply": "",
+            "addressed_agents": [],
+            "needs_help": False,
+        }
     
     # 会話履歴の検証とフォーマット
     validated_entries = []
     for entry in conversation_history:
         if not isinstance(entry, dict):
             continue
-        if 'role' not in entry or 'message' not in entry:
+        role = entry.get("role")
+        message = entry.get("message") or entry.get("content")
+        if not isinstance(role, str) or not isinstance(message, str):
             continue
-        validated_entries.append(entry)
+        validated_entries.append({"role": role, "message": message})
     
     if not validated_entries:
-        return {"needs_help": False}
+        return {
+            "should_reply": False,
+            "reply": "",
+            "addressed_agents": [],
+            "needs_help": False,
+        }
     
     formatted_history = "\n".join(
         f"{entry['role']}: {entry['message']}"
@@ -341,10 +353,34 @@ def analyze_external_conversation(conversation_history: List[dict]) -> dict:
         response_text = response_text.strip()
         
         result = json.loads(response_text)
+        if not isinstance(result, dict):
+            return {
+                "should_reply": False,
+                "reply": "",
+                "addressed_agents": [],
+                "needs_help": False,
+            }
+        # Ensure required defaults
+        result.setdefault("should_reply", False)
+        result.setdefault("reply", "")
+        result.setdefault("addressed_agents", [])
+        result.setdefault("needs_help", False)
         return result
     except json.JSONDecodeError as e:
         logging.error("JSON解析エラー: LLMの出力がJSON形式ではありません")
-        return {"needs_help": False, "error": "JSON解析に失敗しました"}
+        return {
+            "should_reply": False,
+            "reply": "",
+            "addressed_agents": [],
+            "needs_help": False,
+            "error": "JSON解析に失敗しました",
+        }
     except Exception as e:
         logging.error("会話分析エラーが発生しました")
-        return {"needs_help": False, "error": "会話分析エラー"}
+        return {
+            "should_reply": False,
+            "reply": "",
+            "addressed_agents": [],
+            "needs_help": False,
+            "error": "会話分析エラー",
+        }
