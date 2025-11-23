@@ -1,10 +1,10 @@
 import os
 import glob
 import PyPDF2
-from dotenv import load_dotenv
+from env_loader import load_secrets_env
 
-# .envファイルから環境変数を読み込み（必要なら）
-load_dotenv()
+# secrets.envファイルから環境変数を読み込み（必要なら）
+load_secrets_env()
 
 # Gemini API キーの設定
 api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY") or os.getenv("OPENAI_API_KEY")

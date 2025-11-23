@@ -16,8 +16,8 @@
 - Docker tooling (`Dockerfile`, `docker-compose.yml`) mirrors the local workflow: the `qasystem` service runs `flask run` with reload and attaches to the external `${MULTI_AGENT_NETWORK}` for agent-to-agent calls.
 
 ## Configuration & Secrets
-- Put secrets in `.env` (see `env.txt` for placeholders). `GOOGLE_API_KEY`, `GEMINI_API_KEY`, or `OPENAI_API_KEY` must be defined; whichever exists first bootstraps both Gemini and LangChain's OpenAI client. Optional overrides: `OPENAI_BASE_URL`/`OPENAI_API_BASE`, `EMBEDDING_MODEL_NAME`, `EMBEDDING_DEVICE`.
-- Vector jobs read from the same `.env`, so ensure the keys are exported before running any `*_to_vector*.py`.
+- Put secrets in `secrets.env` (see `env.txt` for placeholders). `GOOGLE_API_KEY`, `GEMINI_API_KEY`, or `OPENAI_API_KEY` must be defined; whichever exists first bootstraps both Gemini and LangChain's OpenAI client. Optional overrides: `OPENAI_BASE_URL`/`OPENAI_API_BASE`, `EMBEDDING_MODEL_NAME`, `EMBEDDING_DEVICE`.
+- Vector jobs read from the same `secrets.env`, so ensure the keys are exported before running any `*_to_vector*.py`.
 
 ## Build & Run Commands
 - Create a virtual environment with `python -m venv .venv && source .venv/bin/activate` (or reuse the checked-in `venv/` when allowed) and install dependencies via `pip install -r requirements.txt`.

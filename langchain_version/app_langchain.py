@@ -1,7 +1,7 @@
 from flask import Flask, request, jsonify, render_template
 import os
 import json
-from dotenv import load_dotenv
+from env_loader import load_secrets_env
 
 # 更新後の HuggingFaceEmbeddings のインポート（langchain_huggingface パッケージから）
 from langchain_community.vectorstores import FAISS
@@ -11,8 +11,8 @@ from langchain.chains import RetrievalQA
 from langchain.prompts import PromptTemplate
 from langchain.chains.question_answering import load_qa_chain
 
-# .envファイルから環境変数を読み込み
-load_dotenv()
+# secrets.env ファイルから環境変数を読み込み
+load_secrets_env()
 
 app = Flask(__name__)
 

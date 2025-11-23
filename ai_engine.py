@@ -2,7 +2,7 @@ import os
 import json
 import logging
 from datetime import datetime
-from dotenv import load_dotenv
+from env_loader import load_secrets_env
 
 # llama_index 関連
 from llama_index.core import (
@@ -16,19 +16,20 @@ from llama_index.core.settings import Settings
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from langchain_openai import ChatOpenAI
 
+from model_selection import apply_model_selection, update_override
+
 # ── 環境変数 ──
-load_dotenv()
-
-# Gemini API キーは従来通り .env の GOOGLE_API_KEY / GEMINI_API_KEY を参照
-api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY") or os.getenv("OPENAI_API_KEY")
-if not api_key:
-    raise EnvironmentError("Gemini/OpenAI API key is not set. Please define GOOGLE_API_KEY, GEMINI_API_KEY, or OPENAI_API_KEY in your environment.")
-
-# LangChain の ChatOpenAI が参照する環境変数に流用
-os.environ.setdefault("OPENAI_API_KEY", api_key)
-base_url = os.getenv("OPENAI_BASE_URL") or os.getenv("OPENAI_API_BASE") or "https://generativelanguage.googleapis.com/v1beta/openai/"
-os.environ.setdefault("OPENAI_API_BASE", base_url)
+load_secrets_env()
 logging.basicConfig(level=logging.DEBUG)
+
+
+def refresh_llm(selection_override: dict | None = None):
+    """Refresh shared LLM according to current selection."""
+
+    global llm
+    _, model_name, base_url = update_override(selection_override) if selection_override else apply_model_selection("faq")
+    llm = ChatOpenAI(model=model_name, base_url=base_url or None)
+    Settings.llm = llm
 
 # ── チャンク設定（FAQ 例を想定） ──
 CHUNK_SIZE = 1000
@@ -41,11 +42,10 @@ prompt_helper = PromptHelper(
 )
 
 # ── LLM / 埋め込みモデル設定 ──
-llm = ChatOpenAI(model="gemini-2.0-flash")
+refresh_llm()
 embed_model = HuggingFaceEmbedding(model_name="intfloat/multilingual-e5-large")
 #embed_model = HuggingFaceEmbedding(model_name='cl-nagoya/ruri-v3-310m')
 
-Settings.llm = llm
 Settings.embed_model = embed_model
 Settings.prompt_helper = prompt_helper
 

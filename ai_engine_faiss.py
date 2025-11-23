@@ -3,25 +3,28 @@ import json
 import logging
 from datetime import datetime
 from typing import List, Optional
-from dotenv import load_dotenv
+from env_loader import load_secrets_env
 
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain_openai import ChatOpenAI
 
+from model_selection import apply_model_selection, update_override
+
 # ── 環境変数 ──
-load_dotenv()
-
-api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY") or os.getenv("OPENAI_API_KEY")
-if not api_key:
-    raise EnvironmentError("Gemini/OpenAI API key is not set. Please define GOOGLE_API_KEY, GEMINI_API_KEY, or OPENAI_API_KEY in your environment.")
-
-os.environ.setdefault("OPENAI_API_KEY", api_key)
-base_url = os.getenv("OPENAI_BASE_URL") or os.getenv("OPENAI_API_BASE") or "https://generativelanguage.googleapis.com/v1beta/openai/"
-os.environ.setdefault("OPENAI_API_BASE", base_url)
+load_secrets_env()
 logging.basicConfig(level=logging.DEBUG)
 
-llm = ChatOpenAI(model="gemini-2.5-flash")
+
+def refresh_llm(selection_override: dict | None = None):
+    """Refresh the shared LLM instance based on selection."""
+
+    global llm
+    _, model_name, base_url = update_override(selection_override) if selection_override else apply_model_selection("faq")
+    llm = ChatOpenAI(model=model_name, base_url=base_url or None)
+
+
+refresh_llm()
 
 # ── インデックス設定 ──
 INDEX_DB_DIR = "./home-topic-vdb"

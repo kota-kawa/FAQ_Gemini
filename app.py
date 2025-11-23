@@ -5,12 +5,13 @@ from flask_cors import CORS
 
 import os
 import logging
-from dotenv import load_dotenv
+from env_loader import load_secrets_env
 
 import ai_engine_faiss as ai_engine
+from model_selection import update_override
 
 # ── 環境変数 / Flask 初期化 ──
-load_dotenv()
+load_secrets_env()
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "default_secret_key")
 logging.basicConfig(level=logging.DEBUG)
@@ -79,6 +80,21 @@ def conversation_summary():
     except Exception as e:
         app.logger.exception("Error during conversation summarization:")
         return jsonify({"error": "会話の要約中にエラーが発生しました"}), 500
+
+
+@app.route("/model_settings", methods=["POST"])
+def update_model_settings():
+    """Update the active LLM model without restarting the service."""
+
+    data = request.get_json(silent=True) or {}
+    selection = data if isinstance(data, dict) else {}
+    try:
+        update_override(selection if selection else None)
+        ai_engine.refresh_llm(selection if selection else None)
+    except Exception as exc:  # noqa: BLE001
+        app.logger.exception("Failed to refresh model settings: %s", exc)
+        return jsonify({"error": "モデル設定の更新に失敗しました。"}), 500
+    return jsonify({"status": "ok", "applied": selection or "from_file"})
 
 
 @app.route("/analyze_conversation", methods=["POST"])

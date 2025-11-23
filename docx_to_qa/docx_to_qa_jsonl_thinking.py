@@ -37,6 +37,13 @@ from docx.text.paragraph import Paragraph
 from openai import OpenAI
 from openai import APIError, RateLimitError, APITimeoutError, InternalServerError
 
+_ENV_FILES = [
+    Path(__file__).resolve().parent / "secrets.env",
+    Path(__file__).resolve().parents[1] / "secrets.env",
+]
+for env_path in _ENV_FILES:
+    load_dotenv(env_path, override=False)
+
 # =========================
 # 設定と定数
 # =========================
@@ -416,7 +423,8 @@ def process_docx_to_jsonl(
 
 def main():
     # ハードコード + 環境変数で上書き可
-    load_dotenv()
+    for env_path in _ENV_FILES:
+        load_dotenv(env_path, override=False)
 
     INPUT_DIR = Path(os.getenv("DOCX_IN_DIR", "./home-topic")).resolve()
     OUTPUT_DIR = Path(os.getenv("JSONL_OUT_DIR", "./output_jsonl")).resolve()
@@ -425,7 +433,7 @@ def main():
 
     api_key = os.getenv("GEMINI_API_KEY") or os.getenv("OPENAI_API_KEY") or ""
     if not api_key:
-        print("ERROR: Set GEMINI_API_KEY or OPENAI_API_KEY in .env", file=sys.stderr)
+        print("ERROR: Set GEMINI_API_KEY or OPENAI_API_KEY in secrets.env", file=sys.stderr)
         sys.exit(1)
 
     base_url = os.getenv("OPENAI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai/")

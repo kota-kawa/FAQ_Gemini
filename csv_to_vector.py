@@ -1,7 +1,7 @@
 import os
 import glob
 import pandas as pd
-from dotenv import load_dotenv
+from env_loader import load_secrets_env
 
 # LlamaIndex の主要モジュール
 from llama_index.core import Document, Settings, PromptHelper
@@ -10,8 +10,8 @@ from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 # 修正：GoogleGenAI -> GoogleGenerativeAI に変更
 from langchain_openai import ChatOpenAI
 
-# .env ファイルから環境変数を読み込み（必要なら）
-load_dotenv()
+# secrets.env から環境変数を読み込み（必要なら）
+load_secrets_env()
 
 api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY") or os.getenv("OPENAI_API_KEY")
 if not api_key:

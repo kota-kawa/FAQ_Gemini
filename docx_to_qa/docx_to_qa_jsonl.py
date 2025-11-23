@@ -9,7 +9,7 @@ OpenAI の Python SDK 経由で Google Gemini（OpenAI 互換エンドポイン�
 question, answer の2キーのみを持つ JSONL に出力するスクリプト。
 
 ■ 主な特徴
-- .env から API キー等を読み込み（python-dotenv）
+- secrets.env から API キー等を読み込み（python-dotenv）
 - python-docx で段落・表セルのテキストを抽出
 - 安全なチャンク分割（オーバーラップあり）
 - モデルには「外部知識を使わず、原文のみから Q/A を網羅的に作る」プロンプトを付与
@@ -22,7 +22,7 @@ question, answer の2キーのみを持つ JSONL に出力するスクリプト�
 1) 必要パッケージのインストール:
    pip install openai python-dotenv python-docx tenacity tqdm
 
-2) .env を作成（最低限）:
+2) secrets.env を作成（最低限）:
    GEMINI_API_KEY=あなたのGoogle AI StudioのAPIキー
    OPENAI_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai/
    GEMINI_MODEL=gemini-2.5-pro
@@ -37,7 +37,7 @@ question, answer の2キーのみを持つ JSONL に出力するスクリプト�
    --state qa_state.json     # 途中経過の保存/再開用ステートファイル
    --max-retries 3           # APIリトライ回数（既定: 3）
    --temperature 0.2         # 生成温度（既定: 0.2）
-   --model gemini-2.5-pro    # .env の GEMINI_MODEL より優先
+   --model gemini-2.5-pro    # secrets.env の GEMINI_MODEL より優先
    --rate-wait 0.0           # 呼び出し間の待機秒（既定: 0）
 
 ■ 注意
@@ -55,6 +55,7 @@ import sys
 import time
 import hashlib
 from dataclasses import dataclass
+from pathlib import Path
 from typing import List, Dict, Any, Iterable, Tuple, Set
 
 from dotenv import load_dotenv
@@ -63,7 +64,13 @@ from tqdm import tqdm
 
 # docx
 from docx import Document  # python-docx
-load_dotenv()  
+
+_ENV_FILES = [
+    Path(__file__).resolve().parent / "secrets.env",
+    Path(__file__).resolve().parents[1] / "secrets.env",
+]
+for env_path in _ENV_FILES:
+    load_dotenv(env_path, override=False)
 
 # OpenAI SDK（OpenAI互換エンドポイントでGeminiを叩く）
 from openai import OpenAI
@@ -320,13 +327,17 @@ def save_state(path: str | None, state: RunState) -> None:
 # =========================
 
 def build_settings(args: argparse.Namespace) -> Settings:
-    load_dotenv()  # .env 読み込み
+    for env_path in _ENV_FILES:
+        load_dotenv(env_path, override=False)
 
     api_key = os.getenv("GEMINI_API_KEY") or os.getenv("OPENAI_API_KEY") or ""
     if args.api_key:
         api_key = args.api_key
     if not api_key:
-        print("ERROR: API key not found. Set GEMINI_API_KEY (or OPENAI_API_KEY) in .env or pass --api-key.", file=sys.stderr)
+        print(
+            "ERROR: API key not found. Set GEMINI_API_KEY (or OPENAI_API_KEY) in secrets.env or pass --api-key.",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     base_url = os.getenv("OPENAI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai/")
@@ -442,9 +453,9 @@ def main():
     parser.add_argument("--temperature", type=float, default=0.2, help="生成温度（既定: 0.2）")
     parser.add_argument("--max-retries", type=int, default=3, help="API リトライ回数（既定: 3）")
     parser.add_argument("--rate-wait", type=float, default=0.0, help="各API呼び出し後の待機秒（既定: 0）")
-    parser.add_argument("--api-key", default=None, help="API キー（.env より優先）")
-    parser.add_argument("--base-url", default=None, help="OpenAI 互換エンドポイント（.env より優先）")
-    parser.add_argument("--model", default=None, help="モデル名（.env の GEMINI_MODEL より優先）")
+    parser.add_argument("--api-key", default=None, help="API キー（secrets.env より優先）")
+    parser.add_argument("--base-url", default=None, help="OpenAI 互換エンドポイント（secrets.env より優先）")
+    parser.add_argument("--model", default=None, help="モデル名（secrets.env の GEMINI_MODEL より優先）")
 
     args = parser.parse_args()
     settings = build_settings(args)
