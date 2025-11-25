@@ -43,7 +43,7 @@
     /* ===== コンテナ ===== */
     .container {
       width: 100%;
-      max-width: 480px;
+      max-width: 960px;
       max-height: 80vh;            /* 画面高さの80%を上限に */
       display: flex;
       flex-direction: column;
@@ -59,10 +59,22 @@
       text-align: center;
       font-size: 1.2rem;
       position: relative;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    #model-selector {
+      font-size: 0.9rem;
+      padding: 4px 8px;
+      border-radius: 4px;
+      border: 1px solid #fff;
+      background: var(--primary-dark);
+      color: #fff;
+      cursor: pointer;
     }
     .header .reset-btn {
-      position: absolute; right: 16px; top: 50%;
-      transform: translateY(-50%);
+      position: static;
+      transform: none;
       background: none; border: none;
       color: #fff; cursor: pointer; font-size: 1.2rem;
       transition: transform var(--transition);
@@ -257,7 +269,32 @@
 <body>
   <div class="container">
     <div class="header">
-      Q&A Chat System
+      <span>Q&A Chat System</span>
+      <select id="model-selector">
+        <optgroup label="OpenAI">
+          <option value='{"provider": "openai", "model": "gpt-4.1"}'>GPT-4.1</option>
+          <option value='{"provider": "openai", "model": "gpt-5.1"}'>GPT-5.1</option>
+          <option value='{"provider": "openai", "model": "gpt-5-mini"}'>GPT-5 mini</option>
+        </optgroup>
+        <optgroup label="Gemini (Google)">
+          <option value='{"provider": "gemini", "model": "gemini-2.5-flash"}'>Gemini 2.5 Flash</option>
+          <option value='{"provider": "gemini", "model": "gemini-2.5-pro"}'>Gemini 2.5 Pro</option>
+          <option value='{"provider": "gemini", "model": "gemini-3-pro-preview"}'>Gemini 3 Pro Preview</option>
+        </optgroup>
+        <optgroup label="Claude (Anthropic)">
+          <option value='{"provider": "claude", "model": "claude-sonnet-4-5"}'>Claude Sonnet 4.5</option>
+          <option value='{"provider": "claude", "model": "claude-haiku-4-5"}'>Claude Haiku 4.5</option>
+          <option value='{"provider": "claude", "model": "claude-opus-4-5"}'>Claude Opus 4.5</option>
+        </optgroup>
+        <optgroup label="Groq">
+          <option value='{"provider": "groq", "model": "llama-3.3-70b-versatile"}'>Llama 3.3 70B (Groq)</option>
+          <option value='{"provider": "groq", "model": "llama-3.1-8b-instant"}'>Llama 3.1 8B (Groq)</option>
+          <option value='{"provider": "groq", "model": "openai/gpt-oss-20b"}'>GPT-OSS 20B (Groq)</option>
+          <option value='{"provider": "groq", "model": "meta-llama/llama-4-maverick-17b-128e-instruct"}'>Llama 4 Maverick 17B (Groq)</option>
+          <option value='{"provider": "groq", "model": "moonshotai/kimi-k2-instruct-0905"}'>Kimi K2 Instruct 0905 (Groq)</option>
+          <option value='{"provider": "groq", "model": "qwen/qwen3-32b"}'>Qwen3 32B (Groq)</option>
+        </optgroup>
+      </select>
       <button class="reset-btn" title="リセット">&#x21bb;</button>
     </div>
     <div id="summary-panel" class="summary-panel">
@@ -285,6 +322,7 @@
     const chatBox = document.getElementById('chat');
     const form    = document.getElementById('chat-form');
     const input   = document.getElementById('question');
+    const modelSelector = document.getElementById('model-selector');
     const resetBtn= document.querySelector('.reset-btn');
     const summaryPanel = document.getElementById('summary-panel');
     const summaryContent = document.getElementById('conversation-summary');
@@ -293,6 +331,22 @@
     const summaryToggleLabel = summaryToggleButton.querySelector('.summary-toggle-label');
     const summaryToggleIcon = summaryToggleButton.querySelector('.summary-toggle-icon');
     const DEFAULT_SUMMARY_TEXT = 'まだ会話はありません。';
+
+    modelSelector.addEventListener('change', async (e) => {
+      try {
+        const selection = JSON.parse(e.target.value);
+        const res = await fetch('/model_settings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(selection)
+        });
+        if (!res.ok) throw new Error('Failed to update model');
+        console.log('Model updated successfully');
+      } catch (err) {
+        console.error('Error updating model:', err);
+        alert('モデルの切り替えに失敗しました。');
+      }
+    });
 
     async function fetchHistory() {
       try {
