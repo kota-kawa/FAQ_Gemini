@@ -10,10 +10,10 @@ from typing import Dict, Tuple
 DEFAULT_SELECTION = {"provider": "openai", "model": "gpt-4.1-2025-04-14"}
 
 PROVIDER_DEFAULTS: Dict[str, Dict[str, str | None]] = {
-    "openai": {"api_key_env": "OPENAI_API_KEY", "base_url_env": "OPENAI_BASE_URL", "default_base_url": None},
-    "claude": {"api_key_env": "CLAUDE_API_KEY", "base_url_env": "CLAUDE_API_BASE", "default_base_url": "https://openrouter.ai/api/v1"},
-    "gemini": {"api_key_env": "GEMINI_API_KEY", "base_url_env": "GEMINI_API_BASE", "default_base_url": "https://generativelanguage.googleapis.com/openai/v1"},
-    "groq": {"api_key_env": "GROQ_API_KEY", "base_url_env": "GROQ_API_BASE", "default_base_url": "https://api.groq.com/openai/v1"},
+    "openai": {"api_key_env": "OPENAI_API_KEY", "base_url_env": "OPENAI_BASE_URL"},
+    "claude": {"api_key_env": "CLAUDE_API_KEY", "langchain_api_key_env": "ANTHROPIC_API_KEY"},
+    "gemini": {"api_key_env": "GEMINI_API_KEY", "langchain_api_key_env": "GOOGLE_API_KEY"},
+    "groq": {"api_key_env": "GROQ_API_KEY", "langchain_api_key_env": "GROQ_API_KEY"},
 }
 
 _OVERRIDE_SELECTION: Dict[str, str] | None = None
@@ -49,18 +49,15 @@ def apply_model_selection(agent_key: str = "faq", override: Dict[str, str] | Non
     model = selection.get("model") or DEFAULT_SELECTION["model"]
 
     meta = PROVIDER_DEFAULTS.get(provider, PROVIDER_DEFAULTS["openai"])
-    api_key_env = meta.get("api_key_env") or "OPENAI_API_KEY"
-    base_url_env = meta.get("base_url_env") or ""
+    api_key_env = meta["api_key_env"]
+    langchain_api_key_env = meta.get("langchain_api_key_env", "OPENAI_API_KEY")
+    base_url_env = meta.get("base_url_env")
 
-    api_key = os.getenv(api_key_env) or os.getenv(api_key_env.lower()) or os.getenv("OPENAI_API_KEY")
+    api_key = os.getenv(api_key_env) or os.getenv(api_key_env.lower())
     if api_key:
-        os.environ["OPENAI_API_KEY"] = api_key
+        os.environ[langchain_api_key_env] = api_key
 
-    base_url = ""
-    if base_url_env:
-        base_url = os.getenv(base_url_env, "")
-    if not base_url:
-        base_url = meta.get("default_base_url") or ""
+    base_url = os.getenv(base_url_env, "") if base_url_env else ""
     if base_url:
         os.environ["OPENAI_API_BASE"] = base_url
         os.environ["OPENAI_BASE_URL"] = base_url
