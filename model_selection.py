@@ -11,8 +11,8 @@ DEFAULT_SELECTION = {"provider": "openai", "model": "gpt-4.1-2025-04-14"}
 
 PROVIDER_DEFAULTS: Dict[str, Dict[str, str | None]] = {
     "openai": {"api_key_env": "OPENAI_API_KEY", "base_url_env": "OPENAI_BASE_URL", "default_base_url": None},
-    "claude": {"api_key_env": "CLAUDE_API_KEY", "base_url_env": "CLAUDE_API_BASE", "default_base_url": "https://openrouter.ai/api/v1"},
-    "gemini": {"api_key_env": "GEMINI_API_KEY", "base_url_env": "GEMINI_API_BASE", "default_base_url": "https://generativelanguage.googleapis.com/openai/v1"},
+    "claude": {"api_key_env": "CLAUDE_API_KEY", "base_url_env": "CLAUDE_API_BASE", "default_base_url": None},
+    "gemini": {"api_key_env": "GEMINI_API_KEY", "base_url_env": "GEMINI_API_BASE", "default_base_url": None},
     "groq": {"api_key_env": "GROQ_API_KEY", "base_url_env": "GROQ_API_BASE", "default_base_url": "https://api.groq.com/openai/v1"},
 }
 

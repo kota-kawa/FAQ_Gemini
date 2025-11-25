@@ -8,6 +8,7 @@
 *.json
 *.Identifier
 # ログファイルを無視
+*.log
 
 *.cgi
 *.htaccess

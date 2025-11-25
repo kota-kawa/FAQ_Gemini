@@ -8,6 +8,8 @@ from env_loader import load_secrets_env
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain_openai import ChatOpenAI
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_anthropic import ChatAnthropic
 
 from model_selection import apply_model_selection, update_override
 
@@ -18,10 +20,21 @@ logging.basicConfig(level=logging.DEBUG)
 
 def refresh_llm(selection_override: dict | None = None):
     """Refresh the shared LLM instance based on selection."""
-
     global llm
-    _, model_name, base_url = update_override(selection_override) if selection_override else apply_model_selection("faq")
-    llm = ChatOpenAI(model=model_name, base_url=base_url or None)
+    provider, model_name, base_url = (
+        update_override(selection_override)
+        if selection_override
+        else apply_model_selection("faq")
+    )
+
+    if provider == "gemini":
+        llm = ChatGoogleGenerativeAI(model=model_name, convert_system_message_to_human=True)
+    elif provider == "claude":
+        llm = ChatAnthropic(model_name=model_name)
+    elif provider == "groq":
+        llm = ChatOpenAI(model=model_name, base_url=base_url or None)
+    else: # openai
+        llm = ChatOpenAI(model=model_name, base_url=base_url or None)
 
 
 refresh_llm()
