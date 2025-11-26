@@ -1,7 +1,7 @@
 services:
   qasystem:
     build: .
-    container_name: faq_gemini
+    container_name: lifestyle_agent
     ports:
       - "5000:5000"
     volumes:
@@ -10,7 +10,7 @@ services:
       default:
       multi_agent_network:
         aliases:
-          - faq_gemini
+          - lifestyle_agent
 
 networks:
   multi_agent_network:

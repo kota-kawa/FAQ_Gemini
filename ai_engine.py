@@ -27,7 +27,7 @@ def refresh_llm(selection_override: dict | None = None):
     """Refresh shared LLM according to current selection."""
 
     global llm
-    _, model_name, base_url = update_override(selection_override) if selection_override else apply_model_selection("faq")
+    _, model_name, base_url = update_override(selection_override) if selection_override else apply_model_selection("lifestyle")
     llm = ChatOpenAI(model=model_name, base_url=base_url or None)
     Settings.llm = llm
 

@@ -25,7 +25,7 @@ def refresh_llm(selection_override: dict | None = None):
     provider, model_name, _ = (
         update_override(selection_override)
         if selection_override
-        else apply_model_selection("faq")
+        else apply_model_selection("lifestyle")
     )
 
     if provider == "gemini":

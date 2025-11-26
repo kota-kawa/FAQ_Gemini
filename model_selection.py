@@ -12,7 +12,7 @@ DEFAULT_SELECTION = {"provider": "openai", "model": "gpt-4.1-2025-04-14"}
 PROVIDER_DEFAULTS: Dict[str, Dict[str, str | None]] = {
     "openai": {"api_key_env": "OPENAI_API_KEY", "base_url_env": "OPENAI_BASE_URL"},
     "claude": {"api_key_env": "CLAUDE_API_KEY", "langchain_api_key_env": "ANTHROPIC_API_KEY"},
-    "gemini": {"api_key_env": "GEMINI_API_KEY", "langchain_api_key_env": "GOOGLE_API_KEY"},
+    "gemini": {"api_key_env": "GOOGLE_API_KEY", "langchain_api_key_env": "GOOGLE_API_KEY"},
     "groq": {"api_key_env": "GROQ_API_KEY", "langchain_api_key_env": "GROQ_API_KEY"},
 }
 
@@ -41,7 +41,7 @@ def _load_selection_file(agent_key: str) -> Dict[str, str]:
     return {"provider": provider, "model": model}
 
 
-def apply_model_selection(agent_key: str = "faq", override: Dict[str, str] | None = None) -> Tuple[str, str, str]:
+def apply_model_selection(agent_key: str = "lifestyle", override: Dict[str, str] | None = None) -> Tuple[str, str, str]:
     """Apply model selection to environment and return (provider, model, base_url)."""
 
     selection = override or _OVERRIDE_SELECTION or _load_selection_file(agent_key)
