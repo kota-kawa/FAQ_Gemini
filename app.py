@@ -8,7 +8,7 @@ import logging
 from env_loader import load_secrets_env
 
 import ai_engine_faiss as ai_engine
-from model_selection import update_override
+from model_selection import current_selection, update_override
 
 # ── 環境変数 / Flask 初期化 ──
 load_secrets_env()
@@ -82,9 +82,17 @@ def conversation_summary():
         return jsonify({"error": "会話の要約中にエラーが発生しました"}), 500
 
 
-@app.route("/model_settings", methods=["POST"])
+@app.route("/model_settings", methods=["GET", "POST"])
 def update_model_settings():
-    """Update the active LLM model without restarting the service."""
+    """Update or expose the active LLM model without restarting the service."""
+
+    if request.method == "GET":
+        selection = current_selection("lifestyle")
+        return jsonify({"selection": {
+            "provider": selection.get("provider"),
+            "model": selection.get("model"),
+            "base_url": selection.get("base_url"),
+        }})
 
     data = request.get_json(silent=True) or {}
     selection = data if isinstance(data, dict) else {}

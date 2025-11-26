@@ -331,6 +331,41 @@
     const summaryToggleLabel = summaryToggleButton.querySelector('.summary-toggle-label');
     const summaryToggleIcon = summaryToggleButton.querySelector('.summary-toggle-icon');
     const DEFAULT_SUMMARY_TEXT = 'まだ会話はありません。';
+    const DEFAULT_MODEL_SELECTION = { provider: 'openai', model: 'gpt-4.1' };
+
+    async function hydrateModelSelector() {
+      if (!modelSelector) return;
+      try {
+        const res = await fetch('/model_settings', { cache: 'no-store' });
+        if (!res.ok) throw new Error('failed to load model selection');
+        const data = await res.json();
+        const selection = (data && typeof data === 'object')
+          ? (data.selection || data)
+          : DEFAULT_MODEL_SELECTION;
+        const targetProvider = selection.provider || DEFAULT_MODEL_SELECTION.provider;
+        const targetModel = selection.model || DEFAULT_MODEL_SELECTION.model;
+        let matched = false;
+        Array.from(modelSelector.options).forEach(option => {
+          try {
+            const value = JSON.parse(option.value);
+            if (value.provider === targetProvider && value.model === targetModel) {
+              option.selected = true;
+              matched = true;
+            }
+          } catch (err) {
+            /* ignore malformed options */
+          }
+        });
+        if (!matched && modelSelector.options.length) {
+          modelSelector.selectedIndex = 0;
+        }
+      } catch (err) {
+        console.error('モデル選択状態の取得に失敗しました:', err);
+        if (modelSelector.options.length) {
+          modelSelector.selectedIndex = 0;
+        }
+      }
+    }
 
     modelSelector.addEventListener('change', async (e) => {
       try {
@@ -347,6 +382,8 @@
         alert('モデルの切り替えに失敗しました。');
       }
     });
+
+    hydrateModelSelector();
 
     async function fetchHistory() {
       try {

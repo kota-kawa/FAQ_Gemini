@@ -71,3 +71,10 @@ def update_override(selection: Dict[str, str] | None) -> Tuple[str, str, str]:
     global _OVERRIDE_SELECTION
     _OVERRIDE_SELECTION = selection or None
     return apply_model_selection(override=_OVERRIDE_SELECTION or None)
+
+
+def current_selection(agent_key: str = "lifestyle") -> Dict[str, str]:
+    """Return the currently applied selection without requiring callers to know overrides."""
+
+    provider, model, base_url = apply_model_selection(agent_key)
+    return {"provider": provider, "model": model, "base_url": base_url}
