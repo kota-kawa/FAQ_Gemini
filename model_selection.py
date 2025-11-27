@@ -5,15 +5,43 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Dict, Tuple
+from typing import Dict, List, Tuple
 
-DEFAULT_SELECTION = {"provider": "openai", "model": "gpt-4.1-2025-04-14"}
+DEFAULT_SELECTION = {"provider": "openai", "model": "gpt-4.1"}
 
-PROVIDER_DEFAULTS: Dict[str, Dict[str, str | None]] = {
-    "openai": {"api_key_env": "OPENAI_API_KEY", "base_url_env": "OPENAI_BASE_URL"},
-    "claude": {"api_key_env": "CLAUDE_API_KEY", "langchain_api_key_env": "ANTHROPIC_API_KEY"},
-    "gemini": {"api_key_env": "GOOGLE_API_KEY", "langchain_api_key_env": "GOOGLE_API_KEY"},
-    "groq": {"api_key_env": "GROQ_API_KEY", "langchain_api_key_env": "GROQ_API_KEY"},
+PROVIDER_DEFAULTS: Dict[str, Dict[str, str | List[str] | None]] = {
+    "openai": {
+        "api_key_env": "OPENAI_API_KEY",
+        "api_key_aliases": [],
+        "langchain_api_key_env": "OPENAI_API_KEY",
+        "base_url_env": "OPENAI_BASE_URL",
+        "base_url_env_aliases": ["OPENAI_API_BASE"],
+        "default_base_url": None,
+    },
+    "claude": {
+        "api_key_env": "CLAUDE_API_KEY",
+        "api_key_aliases": ["ANTHROPIC_API_KEY"],
+        "langchain_api_key_env": "ANTHROPIC_API_KEY",
+        "base_url_env": "CLAUDE_API_BASE",
+        "base_url_env_aliases": [],
+        "default_base_url": "https://openrouter.ai/api/v1",
+    },
+    "gemini": {
+        "api_key_env": "GEMINI_API_KEY",
+        "api_key_aliases": ["GOOGLE_API_KEY", "PALM_API_KEY"],
+        "langchain_api_key_env": "GOOGLE_API_KEY",
+        "base_url_env": "GEMINI_API_BASE",
+        "base_url_env_aliases": [],
+        "default_base_url": "https://generativelanguage.googleapis.com/openai/v1",
+    },
+    "groq": {
+        "api_key_env": "GROQ_API_KEY",
+        "api_key_aliases": [],
+        "langchain_api_key_env": "GROQ_API_KEY",
+        "base_url_env": "GROQ_API_BASE",
+        "base_url_env_aliases": [],
+        "default_base_url": "https://api.groq.com/openai/v1",
+    },
 }
 
 _OVERRIDE_SELECTION: Dict[str, str] | None = None
@@ -41,6 +69,59 @@ def _load_selection_file(agent_key: str) -> Dict[str, str]:
     return {"provider": provider, "model": model}
 
 
+def _resolve_api_key(meta: Dict[str, str | List[str] | None]) -> str:
+    """Return the first available API key for the provider."""
+
+    env_names: List[str] = []
+    primary = meta.get("api_key_env")
+    aliases = meta.get("api_key_aliases") or []
+    if isinstance(primary, str):
+        env_names.append(primary)
+        env_names.append(primary.lower())
+    if isinstance(aliases, list):
+        for alias in aliases:
+            if isinstance(alias, str) and alias:
+                env_names.append(alias)
+                env_names.append(alias.lower())
+
+    for env_name in env_names:
+        value = os.getenv(env_name)
+        if value:
+            return value
+    return ""
+
+
+def _resolve_base_url(selection: Dict[str, str], meta: Dict[str, str | List[str] | None]) -> str:
+    """Resolve base_url preference from selection, env, or provider defaults."""
+
+    selected_base = selection.get("base_url")
+    if isinstance(selected_base, str) and selected_base.strip():
+        return selected_base.strip()
+
+    env_names: List[str] = []
+    base_env = meta.get("base_url_env")
+    aliases = meta.get("base_url_env_aliases") or []
+    if isinstance(base_env, str):
+        env_names.append(base_env)
+        env_names.append(base_env.lower())
+    if isinstance(aliases, list):
+        for alias in aliases:
+            if isinstance(alias, str) and alias:
+                env_names.append(alias)
+                env_names.append(alias.lower())
+
+    for env_name in env_names:
+        value = os.getenv(env_name)
+        if value:
+            return value.strip()
+
+    default_base = meta.get("default_base_url")
+    if isinstance(default_base, str):
+        return default_base.strip()
+
+    return ""
+
+
 def apply_model_selection(agent_key: str = "lifestyle", override: Dict[str, str] | None = None) -> Tuple[str, str, str]:
     """Apply model selection to environment and return (provider, model, base_url)."""
 
@@ -49,18 +130,18 @@ def apply_model_selection(agent_key: str = "lifestyle", override: Dict[str, str]
     model = selection.get("model") or DEFAULT_SELECTION["model"]
 
     meta = PROVIDER_DEFAULTS.get(provider, PROVIDER_DEFAULTS["openai"])
-    api_key_env = meta["api_key_env"]
-    langchain_api_key_env = meta.get("langchain_api_key_env", "OPENAI_API_KEY")
-    base_url_env = meta.get("base_url_env")
-
-    api_key = os.getenv(api_key_env) or os.getenv(api_key_env.lower())
+    api_key = _resolve_api_key(meta)
+    langchain_api_key_env = meta.get("langchain_api_key_env") or meta.get("api_key_env") or "OPENAI_API_KEY"
     if api_key:
         os.environ[langchain_api_key_env] = api_key
 
-    base_url = os.getenv(base_url_env, "") if base_url_env else ""
+    base_url = _resolve_base_url(selection, meta)
     if base_url:
         os.environ["OPENAI_API_BASE"] = base_url
         os.environ["OPENAI_BASE_URL"] = base_url
+    else:
+        os.environ.pop("OPENAI_API_BASE", None)
+        os.environ.pop("OPENAI_BASE_URL", None)
 
     return provider, model, base_url
 
