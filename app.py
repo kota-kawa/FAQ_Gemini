@@ -5,6 +5,7 @@ from flask_cors import CORS
 
 import os
 import logging
+import requests
 from env_loader import load_secrets_env
 
 import ai_engine_faiss as ai_engine
@@ -15,6 +16,7 @@ load_secrets_env()
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "default_secret_key")
 logging.basicConfig(level=logging.DEBUG)
+_PLATFORM_BASE = os.getenv("MULTI_AGENT_PLATFORM_BASE", "http://web:5050").rstrip("/")
 
 
 @app.after_request
@@ -28,6 +30,23 @@ def add_cors_headers(response):
     else:
         response.headers.setdefault("Access-Control-Allow-Headers", "Content-Type")
     return response
+
+
+def _notify_platform(selection: dict) -> None:
+    """Best-effort push of the lifestyle model selection back to the platform."""
+
+    if not _PLATFORM_BASE or not isinstance(selection, dict):
+        return
+
+    try:
+        url = f"{_PLATFORM_BASE}/api/model_settings"
+        payload = {"selection": {"lifestyle": selection}}
+        headers = {"X-Agent-Origin": "lifestyle"}
+        res = requests.post(url, json=payload, headers=headers, timeout=2.0)
+        if not res.ok:
+            app.logger.info("Platform model sync skipped (%s %s)", res.status_code, res.text)
+    except requests.exceptions.RequestException as exc:
+        app.logger.info("Platform model sync skipped (%s)", exc)
 
 
 
@@ -99,6 +118,8 @@ def update_model_settings():
     try:
         update_override(selection if selection else None)
         ai_engine.refresh_llm(selection if selection else None)
+        if request.headers.get("X-Platform-Propagation") != "1" and selection:
+            _notify_platform(selection)
     except Exception as exc:  # noqa: BLE001
         app.logger.exception("Failed to refresh model settings: %s", exc)
         return jsonify({"error": "モデル設定の更新に失敗しました。"}), 500
