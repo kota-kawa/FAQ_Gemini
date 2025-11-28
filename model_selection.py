@@ -45,6 +45,7 @@ PROVIDER_DEFAULTS: Dict[str, Dict[str, str | List[str] | None]] = {
 }
 
 _OVERRIDE_SELECTION: Dict[str, str] | None = None
+_LAST_SET_BASE_URL: str | None = None
 
 
 def _load_selection_file(agent_key: str) -> Dict[str, str]:
@@ -64,7 +65,7 @@ def _load_selection_file(agent_key: str) -> Dict[str, str]:
     if not isinstance(chosen, dict):
         return dict(DEFAULT_SELECTION)
 
-    provider = (chosen.get("provider") or DEFAULT_SELECTION["provider"]).strip()
+    provider = (chosen.get("provider") or DEFAULT_SELECTION["provider"]).strip().lower()
     model = (chosen.get("model") or DEFAULT_SELECTION["model"]).strip()
     return {"provider": provider, "model": model}
 
@@ -112,7 +113,7 @@ def _resolve_base_url(selection: Dict[str, str], meta: Dict[str, str | List[str]
 
     for env_name in env_names:
         value = os.getenv(env_name)
-        if value:
+        if value and value != _LAST_SET_BASE_URL:
             return value.strip()
 
     default_base = meta.get("default_base_url")
@@ -125,9 +126,11 @@ def _resolve_base_url(selection: Dict[str, str], meta: Dict[str, str | List[str]
 def apply_model_selection(agent_key: str = "lifestyle", override: Dict[str, str] | None = None) -> Tuple[str, str, str]:
     """Apply model selection to environment and return (provider, model, base_url)."""
 
+    global _LAST_SET_BASE_URL
+
     selection = override or _OVERRIDE_SELECTION or _load_selection_file(agent_key)
-    provider = selection.get("provider") or DEFAULT_SELECTION["provider"]
-    model = selection.get("model") or DEFAULT_SELECTION["model"]
+    provider = (selection.get("provider") or DEFAULT_SELECTION["provider"]).strip().lower()
+    model = (selection.get("model") or DEFAULT_SELECTION["model"]).strip()
 
     meta = PROVIDER_DEFAULTS.get(provider, PROVIDER_DEFAULTS["openai"])
     api_key = _resolve_api_key(meta)
@@ -139,9 +142,11 @@ def apply_model_selection(agent_key: str = "lifestyle", override: Dict[str, str]
     if base_url:
         os.environ["OPENAI_API_BASE"] = base_url
         os.environ["OPENAI_BASE_URL"] = base_url
+        _LAST_SET_BASE_URL = base_url
     else:
         os.environ.pop("OPENAI_API_BASE", None)
         os.environ.pop("OPENAI_BASE_URL", None)
+        _LAST_SET_BASE_URL = None
 
     return provider, model, base_url
 

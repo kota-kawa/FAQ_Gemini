@@ -22,11 +22,13 @@ logging.basicConfig(level=logging.DEBUG)
 def refresh_llm(selection_override: dict | None = None):
     """Refresh the shared LLM instance based on selection."""
     global llm
-    provider, model_name, _ = (
-        update_override(selection_override)
-        if selection_override
-        else apply_model_selection("lifestyle")
-    )
+    if selection_override:
+        provider, model_name, _ = update_override(selection_override)
+    else:
+        provider, model_name, _ = apply_model_selection("lifestyle")
+
+    provider = provider.lower()
+    logging.info(f"Refreshing LLM: provider={provider}, model={model_name}")
 
     if provider == "gemini":
         llm = ChatGoogleGenerativeAI(model=model_name, convert_system_message_to_human=True)
