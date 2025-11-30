@@ -41,3 +41,6 @@
 ## Commit & Pull Request Guidelines
 - Keep commits short, present-tense (English or Japanese), and optionally scoped (`docs:`, `fix:`). Each commit should represent one logical change and note any vector rebuilds or regenerated assets in the body.
 - PR descriptions must cover the motivation, manual/automated test steps (`python app.py`, ingestion script invocations, curl checks), and link related tickets or cooperating agents so reviewers understand downstream impact.
+
+## Critical Instruction / 重要指示
+どれだけ時間とコストをかけてもよいので、確実に目標が達成されるようにしてほしい。
