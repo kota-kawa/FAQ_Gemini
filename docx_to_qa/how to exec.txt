@@ -1,0 +1,2 @@
+python3 docx_to_qa_jsonl_thinking.py ./constitution/1.docx \
+  ./jsonl/1.jsonl --think --think-effort high

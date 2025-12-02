@@ -1,0 +1,7 @@
+{
+  "llm_calls": 5,
+  "total_latency_sec": 45.961659530999896,
+  "total_prompt_chars": 1039,
+  "total_response_chars": 280,
+  "total_token_estimate": 0
+}

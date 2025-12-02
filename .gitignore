@@ -1,33 +1,73 @@
-# バイナリファイルを無視
+# --- Python Standard ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# --- Virtual Environments ---
+venv/
+.venv/
+env/
+ENV/
+.env_bak/
+
+# --- Environment Variables & Secrets ---
+.env
 *.env
-*.ini
-*.service
-*.sock
-*.exe
-*.dll
-*.json
-*.Identifier
-# ログファイルを無視
-*.log
+secrets.env
 
-*.cgi
-*.htaccess
-
-*.zip
-*.pptx
-*.txt
-
-
-
-# OSやIDEの一時ファイルを無視
+# --- IDE & OS Files ---
+.idea/
+.vscode/
+*.swp
+*.swo
 .DS_Store
 Thumbs.db
-.vscode/
+ehthumbs.db
+desktop.ini
 
-# 仮想環境ディレクトリを無視
-venv/
+# --- Logs ---
+*.log
 
-# Python キャッシュを無視
-__pycache__/
-*.pyc
-*.pyo
+# --- Project Specific: Runtime & Output ---
+# Runtime conversation history
+conversation_history.json
+
+# Generated Vector Databases (FAISS indices)
+# These are build artifacts and should generally be rebuilt from source
+home-topic-vdb/
+constitution_vector_db/
+.constitution_vector_db/
+
+# Generated Static Outputs
+static/vector_db_*/
+static/sample_FAQ_*/
+output_jsonl/
+
+# --- Temporary/Binary Files ---
+*.pid
+*.sock
+*.gz
+*.zip
+*.tar
+
+# Note: We removed blanket ignores for *.json, *.txt, *.docx, *.pdf 
+# to allow tracking of source data and requirements.
+*.Identifier
