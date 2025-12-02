@@ -76,7 +76,7 @@ def process_csv(csv_path: str) -> list[Document]:
         return []
 
 # LLM のインスタンスを生成し、Settings に設定
-llm = ChatOpenAI(model='gemini-2.0-flash')
+llm = ChatOpenAI(model='gemini-2.5-flash')
 Settings.llm = llm
 
 # PromptHelper の初期化（max_tokens, chunk_size, chunk_overlap_ratio）
