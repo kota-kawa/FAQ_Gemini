@@ -272,18 +272,13 @@
       <span>Q&A Chat System</span>
       <select id="model-selector">
         <optgroup label="OpenAI">
-          <option value='{"provider": "openai", "model": "gpt-4.1"}'>GPT-4.1</option>
           <option value='{"provider": "openai", "model": "gpt-5.1"}'>GPT-5.1</option>
-          <option value='{"provider": "openai", "model": "gpt-5-mini"}'>GPT-5 mini</option>
         </optgroup>
         <optgroup label="Gemini (Google)">
-          <option value='{"provider": "gemini", "model": "gemini-2.5-flash"}'>Gemini 2.5 Flash</option>
           <option value='{"provider": "gemini", "model": "gemini-2.5-flash-lite"}'>Gemini 2.5 Flash-Lite</option>
-          <option value='{"provider": "gemini", "model": "gemini-2.5-pro"}'>Gemini 2.5 Pro</option>
           <option value='{"provider": "gemini", "model": "gemini-3-pro-preview"}'>Gemini 3 Pro Preview</option>
         </optgroup>
         <optgroup label="Claude (Anthropic)">
-          <option value='{"provider": "claude", "model": "claude-sonnet-4-5"}'>Claude Sonnet 4.5</option>
           <option value='{"provider": "claude", "model": "claude-haiku-4-5"}'>Claude Haiku 4.5</option>
           <option value='{"provider": "claude", "model": "claude-opus-4-5"}'>Claude Opus 4.5</option>
         </optgroup>
@@ -291,8 +286,6 @@
           <option value='{"provider": "groq", "model": "llama-3.3-70b-versatile"}'>Llama 3.3 70B (Groq)</option>
           <option value='{"provider": "groq", "model": "llama-3.1-8b-instant"}'>Llama 3.1 8B (Groq)</option>
           <option value='{"provider": "groq", "model": "openai/gpt-oss-20b"}'>GPT-OSS 20B (Groq)</option>
-          <option value='{"provider": "groq", "model": "meta-llama/llama-4-maverick-17b-128e-instruct"}'>Llama 4 Maverick 17B (Groq)</option>
-          <option value='{"provider": "groq", "model": "moonshotai/kimi-k2-instruct-0905"}'>Kimi K2 Instruct 0905 (Groq)</option>
           <option value='{"provider": "groq", "model": "qwen/qwen3-32b"}'>Qwen3 32B (Groq)</option>
         </optgroup>
       </select>
@@ -332,7 +325,7 @@
     const summaryToggleLabel = summaryToggleButton.querySelector('.summary-toggle-label');
     const summaryToggleIcon = summaryToggleButton.querySelector('.summary-toggle-icon');
     const DEFAULT_SUMMARY_TEXT = 'まだ会話はありません。';
-    const DEFAULT_MODEL_SELECTION = { provider: 'openai', model: 'gpt-4.1' };
+    const DEFAULT_MODEL_SELECTION = { provider: 'openai', model: 'gpt-5.1' };
 
     async function hydrateModelSelector() {
       if (!modelSelector) return;

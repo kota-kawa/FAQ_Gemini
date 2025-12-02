@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 from typing import Dict, List, Tuple
 
-DEFAULT_SELECTION = {"provider": "openai", "model": "gpt-4.1"}
+DEFAULT_SELECTION = {"provider": "openai", "model": "gpt-5.1"}
 
 PROVIDER_DEFAULTS: Dict[str, Dict[str, str | List[str] | None]] = {
     "openai": {
