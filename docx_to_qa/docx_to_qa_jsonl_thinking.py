@@ -10,7 +10,7 @@ docx_to_qa_jsonl_thinking.py
 主な改良点:
 * モデル返答を JSON に強制（json_schema -> json_object -> なし の順で試行）
 * パースの堅牢化（配列, {"pairs":[...]}, ```json ブロック```, Q: / A: 形式）
-* モデルが flash 系なら自動で gemini-2.5-pro に切替（thinking 対応のため）
+* モデルが flash 系なら自動で gemini-3-pro-preview に切替（thinking 対応のため）
 * 先頭200文字のデバッグ出力（最初の失敗のみ）
 * **ステートファイル機能を完全無効化（./state を読み書きしない）**
 """
@@ -437,11 +437,11 @@ def main():
         sys.exit(1)
 
     base_url = os.getenv("OPENAI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai/")
-    model = os.getenv("GEMINI_MODEL", "gemini-2.5-pro")
+    model = os.getenv("GEMINI_MODEL", "gemini-3-pro-preview")
     # flash 強制回避（thinkingが効かないため）
     if "flash" in model.lower():
-        print(f"[Info] Model '{model}' does not support reasoning high. Using 'gemini-2.5-pro' instead.")
-        model = "gemini-2.5-pro"
+        print(f"[Info] Model '{model}' does not support reasoning high. Using 'gemini-3-pro-preview' instead.")
+        model = "gemini-3-pro-preview"
 
     settings = Settings(
         api_key=api_key,

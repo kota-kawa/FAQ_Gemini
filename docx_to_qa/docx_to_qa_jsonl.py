@@ -25,7 +25,7 @@ question, answer の2キーのみを持つ JSONL に出力するスクリプト�
 2) secrets.env を作成（最低限）:
    GEMINI_API_KEY=あなたのGoogle AI StudioのAPIキー
    OPENAI_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai/
-   GEMINI_MODEL=gemini-2.5-pro
+   GEMINI_MODEL=gemini-2.5-flash
 
 3) 実行:
    python docx_to_qa_jsonl.py input.docx output.jsonl
@@ -37,7 +37,7 @@ question, answer の2キーのみを持つ JSONL に出力するスクリプト�
    --state qa_state.json     # 途中経過の保存/再開用ステートファイル
    --max-retries 3           # APIリトライ回数（既定: 3）
    --temperature 0.2         # 生成温度（既定: 0.2）
-   --model gemini-2.5-pro    # secrets.env の GEMINI_MODEL より優先
+   --model gemini-2.5-flash    # secrets.env の GEMINI_MODEL より優先
    --rate-wait 0.0           # 呼び出し間の待機秒（既定: 0）
 
 ■ 注意
@@ -344,7 +344,7 @@ def build_settings(args: argparse.Namespace) -> Settings:
     if args.base_url:
         base_url = args.base_url
 
-    model = args.model or os.getenv("GEMINI_MODEL", "gemini-2.5-pro")
+    model = args.model or os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
     return Settings(
         api_key=api_key,
