@@ -7,6 +7,7 @@
   - `/reset_history`, `/conversation_history`, and `/conversation_summary` manage/chat through `conversation_history.json`.
   - `/analyze_conversation` inspects an external transcript and, when家庭科系の知識で解決できると判断した場合, turns it into a concrete VDB query plus support message.
   - `/` renders `templates/index.html`, whose inline JS handles the summary accordion, optimistic chat updates, loading spinners, and fetches listed above.
+- `mcp_server.py` exposes `/mcp/sse` + `/mcp/messages` bridges for MCP clients and defines the `rag_answer` / `analyze_conversation` tools backed by the same logic as the HTTP APIs (install via `pip install "mcp[cli]"`).
 - Retrieval and reasoning live in `ai_engine_faiss.py`. It loads every `home-topic-vdb/*/persist` FAISS store with `HuggingFaceEmbeddings` (`intfloat/multilingual-e5-large` on `EMBEDDING_DEVICE`), queries with `vector_retriever`, and calls `ChatOpenAI(model="gemini-2.5-flash")` through the Gemini-compatible OpenAI shim.
   - `conversation_history.json` stores alternating `User`/`AI` turns; `reset_history()` clears it and the summary endpoint reuses the same file.
   - `get_conversation_summary()` and `analyze_external_conversation()` each run bespoke prompts so tweaks there must respect the JSON contracts in `app.py`.

@@ -18,3 +18,4 @@ llama-index-llms-langchain==0.6.1
 langchain-google-genai
 langchain-anthropic
 langchain-groq
+mcp[cli]

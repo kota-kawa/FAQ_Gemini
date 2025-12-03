@@ -1,14 +1,22 @@
 # flask_app.py
-from flask import Flask, request, jsonify, render_template
-
-from flask_cors import CORS
-
-import os
+import asyncio
+import json
 import logging
+import os
+import queue
+import threading
+import uuid
+
+import anyio
 import requests
 from env_loader import load_secrets_env
+from flask import Flask, Response, jsonify, render_template, request, stream_with_context
+from flask_cors import CORS
+from mcp.types import JSONRPCMessage
 
 import ai_engine_faiss as ai_engine
+from lifestyle_tools import analyze_conversation_payload, run_rag_answer
+from mcp_server import mcp_server
 from model_selection import current_selection, update_override
 
 # ── 環境変数 / Flask 初期化 ──
@@ -17,6 +25,7 @@ app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "default_secret_key")
 logging.basicConfig(level=logging.DEBUG)
 _PLATFORM_BASE = os.getenv("MULTI_AGENT_PLATFORM_BASE", "http://web:5050").rstrip("/")
+_MCP_SESSIONS: dict[str, queue.Queue] = {}
 
 
 @app.after_request
@@ -58,8 +67,8 @@ def rag_answer():
     if not question:
         return jsonify({"error": "質問を入力してください"}), 400
     try:
-        answer, sources = ai_engine.get_answer(question)
-        return jsonify({"answer": answer, "sources": sources})
+        result = run_rag_answer(question)
+        return jsonify(result)
     except Exception as e:
         app.logger.exception("Error during query processing:")
         return jsonify({"error": str(e)}), 500
@@ -73,11 +82,13 @@ def agent_rag_answer():
     if not question:
         return jsonify({"error": "質問を入力してください"}), 400
     try:
-        answer, sources = ai_engine.get_answer(question, persist_history=False)
-        return jsonify({"answer": answer, "sources": sources})
+        result = run_rag_answer(question, persist_history=False)
+        return jsonify(result)
     except Exception as e:
         app.logger.exception("Error during external agent query processing:")
         return jsonify({"error": str(e)}), 500
+
+
 @app.route("/reset_history", methods=["POST"])
 def reset_history():
     """会話履歴をリセット"""
@@ -126,6 +137,92 @@ def update_model_settings():
     return jsonify({"status": "ok", "applied": selection or "from_file"})
 
 
+# --- MCP Server Bridge ---
+@app.route("/mcp/sse")
+def mcp_sse_endpoint():
+    session_id = str(uuid.uuid4())
+    input_queue: queue.Queue = queue.Queue()
+    output_queue: queue.Queue = queue.Queue()
+    _MCP_SESSIONS[session_id] = input_queue
+
+    def run_server_loop():
+        async def run():
+            read_stream_send, read_stream_recv = anyio.create_memory_object_stream(10)
+            write_stream_send, write_stream_recv = anyio.create_memory_object_stream(10)
+
+            async def feed_input():
+                while True:
+                    try:
+                        msg = await asyncio.to_thread(input_queue.get)
+                        if msg is None:
+                            break
+                        try:
+                            parsed = JSONRPCMessage.model_validate(msg)
+                            await read_stream_send.send(parsed)
+                        except Exception as exc:  # noqa: BLE001
+                            app.logger.warning("MCP Parse Error: %s", exc)
+                    except Exception:  # noqa: BLE001 - defensive loop guard
+                        break
+                await read_stream_send.aclose()
+
+            async def consume_output():
+                async with write_stream_recv:
+                    async for msg in write_stream_recv:
+                        try:
+                            if hasattr(msg, "model_dump_json"):
+                                data = msg.model_dump_json()
+                            else:
+                                data = json.dumps(msg)
+                        except Exception as exc:  # noqa: BLE001
+                            app.logger.warning("MCP serialization error: %s", exc)
+                            continue
+                        output_queue.put(f"event: message\ndata: {data}\n\n")
+                output_queue.put(None)
+
+            async with anyio.create_task_group() as tg:
+                tg.start_soon(feed_input)
+                tg.start_soon(consume_output)
+                output_queue.put(f"event: endpoint\ndata: /mcp/messages?session_id={session_id}\n\n")
+
+                try:
+                    await mcp_server.run(
+                        read_stream_recv,
+                        write_stream_send,
+                        initialization_options=mcp_server.create_initialization_options(),
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    app.logger.exception("MCP Run Error: %s", exc)
+
+        try:
+            asyncio.run(run())
+        finally:
+            _MCP_SESSIONS.pop(session_id, None)
+
+    threading.Thread(target=run_server_loop, daemon=True).start()
+
+    def generate():
+        while True:
+            try:
+                msg = output_queue.get(timeout=25)
+                if msg is None:
+                    break
+                yield msg
+            except queue.Empty:
+                yield ": keepalive\n\n"
+
+    return Response(stream_with_context(generate()), mimetype="text/event-stream")
+
+
+@app.route("/mcp/messages", methods=["POST"])
+def mcp_messages_endpoint():
+    session_id = request.args.get("session_id")
+    if not session_id or session_id not in _MCP_SESSIONS:
+        return jsonify({"error": "Session not found"}), 404
+
+    _MCP_SESSIONS[session_id].put(request.json)
+    return jsonify({"status": "accepted"}), 202
+
+
 @app.route("/analyze_conversation", methods=["POST"])
 def analyze_conversation():
     """
@@ -162,66 +259,12 @@ def analyze_conversation():
     if not conversation_history:
         return jsonify({"error": "会話履歴が空です"}), 400
     
-    if not isinstance(conversation_history, list):
-        return jsonify({"error": "conversation_historyはリスト形式で送信してください"}), 400
-    
     try:
-        # 会話履歴を分析
-        analysis = ai_engine.analyze_external_conversation(conversation_history)
-        
-        response = {
-            "analyzed": True,
-            "needs_help": analysis.get("needs_help", False),
-            "should_reply": bool(analysis.get("should_reply", False)),
-            "reply": analysis.get("reply", "") or "",
-            "addressed_agents": analysis.get("addressed_agents", []) or []
-        }
-        
-        # エラーがあればログに記録するが、レスポンスには含めない（セキュリティのため）
-        if "error" in analysis:
-            app.logger.warning(f"Analysis error: {analysis['error']}")
-        
-        # 支援が必要な場合、VDBから回答を取得
-        if analysis.get("needs_help"):
-            # LLMからの出力を安全に取得（例外情報は含まれない）
-            problem = analysis.get("problem", "")
-            question = analysis.get("question", "")
-            
-            # 安全性のため、problemとquestionが文字列であることを確認
-            if not isinstance(problem, str):
-                problem = ""
-            if not isinstance(question, str):
-                question = ""
-            
-            response["problem"] = problem
-            
-            if question:
-                # 既存のRAGロジックを使用して回答を生成
-                try:
-                    answer, sources = ai_engine.get_answer(question)
-                    response["support_message"] = answer
-                    response["sources"] = sources
-                    if not response["reply"]:
-                        response["reply"] = answer
-                        response["should_reply"] = True
-                except Exception:
-                    app.logger.exception("Error getting answer from VDB:")
-                    response["support_message"] = "回答の取得中にエラーが発生しました。"
-                    response["sources"] = []
-                    if not response["reply"]:
-                        response["reply"] = response["support_message"]
-                        response["should_reply"] = True
-
-            else:
-                response["support_message"] = "問題は特定されましたが、具体的な質問が生成されませんでした。"
-                response["sources"] = []
-                if not response["reply"]:
-                    response["reply"] = response["support_message"]
-                    response["should_reply"] = True
-        
+        response = analyze_conversation_payload(conversation_history)
         return jsonify(response)
-        
-    except Exception as e:
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception:
         app.logger.exception("Error during conversation analysis:")
         return jsonify({"error": "会話の分析中にエラーが発生しました"}), 500
 
