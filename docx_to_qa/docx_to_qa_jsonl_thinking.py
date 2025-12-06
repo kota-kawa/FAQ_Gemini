@@ -427,7 +427,7 @@ def main():
         load_dotenv(env_path, override=False)
 
     INPUT_DIR = Path(os.getenv("DOCX_IN_DIR", "./home-topic")).resolve()
-    OUTPUT_DIR = Path(os.getenv("JSONL_OUT_DIR", "./output_jsonl")).resolve()
+    OUTPUT_DIR = Path(os.getenv("JSONL_OUT_DIR", "./qa_data_jsonl")).resolve()
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
