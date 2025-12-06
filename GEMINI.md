@@ -1,7 +1,7 @@
-# Life Assistant Agent - Gemini Context
+# Life Style Agent - Gemini Context
 
 ## Project Overview
-The **Life Assistant Agent** is a Retrieval-Augmented Generation (RAG) system designed to answer lifestyle-related questions (cooking, cleaning, electronics, civil law, etc.). It operates as part of a multi-agent system, exposing a Flask-based API for user interaction and inter-agent communication. It uses FAISS for vector storage and LangChain for orchestration.
+The **Life Style Agent** is a Retrieval-Augmented Generation (RAG) system designed to answer lifestyle-related questions (cooking, cleaning, electronics, civil law, etc.). It operates as part of a multi-agent system, exposing a Flask-based API for user interaction and inter-agent communication. It uses FAISS for vector storage and LangChain for orchestration.
 
 ## Architecture
 - **Entry Point (`app.py`):** A Flask application that provides endpoints for:

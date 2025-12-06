@@ -1,4 +1,4 @@
-"""Shared helpers for Life-Assistant API and MCP tools."""
+"""Shared helpers for Life-Style API and MCP tools."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""MCP server exposing Life-Assistant tools."""
+"""MCP server exposing Life-Style tools."""
 
 from __future__ import annotations
 
@@ -17,12 +17,12 @@ except ModuleNotFoundError as exc:  # pragma: no cover - import guard for clarit
     raise RuntimeError('mcp[cli] is required. Install with `pip install "mcp[cli]"`.') from exc
 
 load_secrets_env()
-mcp_server = Server("life-assistant-agent")
+mcp_server = Server("life-style-agent")
 
 
 @mcp_server.list_tools()
 async def list_tools() -> list[Tool]:
-    """Expose available Life-Assistant tools."""
+    """Expose available Life-Style tools."""
 
     return [
         Tool(
