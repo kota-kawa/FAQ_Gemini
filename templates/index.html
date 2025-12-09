@@ -197,6 +197,60 @@
     .message.user .text { background: var(--user-msg); }
     .message.bot  .text { background: var(--bot-msg);  }
 
+    /* Markdown & Bot Message Styling */
+    .message.bot .text {
+      font-weight: 500;
+      line-height: 1.6;
+    }
+    .message.bot .text h1, .message.bot .text h2, .message.bot .text h3, .message.bot .text h4, .message.bot .text h5, .message.bot .text h6 {
+      font-weight: 700;
+      margin-top: 1.2em;
+      margin-bottom: 0.6em;
+      line-height: 1.3;
+    }
+    .message.bot .text h1 { font-size: 1.5em; border-bottom: 1px solid #ccc; padding-bottom: 0.3em; }
+    .message.bot .text h2 { font-size: 1.3em; }
+    .message.bot .text h3 { font-size: 1.1em; }
+    .message.bot .text p { margin-bottom: 1em; }
+    .message.bot .text p:last-child { margin-bottom: 0; }
+    .message.bot .text ul, .message.bot .text ol { margin-left: 1.5em; margin-bottom: 1em; }
+    .message.bot .text li { margin-bottom: 0.3em; }
+    .message.bot .text strong, .message.bot .text b { font-weight: 700; }
+    .message.bot .text code {
+      background: rgba(0,0,0,0.08);
+      padding: 2px 5px;
+      border-radius: 4px;
+      font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+      font-size: 0.9em;
+    }
+    .message.bot .text pre {
+      background: #2d2d2d;
+      color: #f8f8f2;
+      padding: 12px;
+      border-radius: 6px;
+      overflow-x: auto;
+      margin-bottom: 1em;
+    }
+    .message.bot .text pre code { background: none; padding: 0; color: inherit; }
+    .message.bot .text blockquote {
+      border-left: 4px solid #ccc;
+      padding-left: 1em;
+      color: #555;
+      margin-bottom: 1em;
+    }
+    .message.bot .text table {
+      border-collapse: collapse;
+      margin: 1em 0;
+      width: 100%;
+      font-size: 0.95em;
+    }
+    .message.bot .text th, .message.bot .text td {
+      border: 1px solid #c8c8c8;
+      padding: 8px 12px;
+      text-align: left;
+    }
+    .message.bot .text th { background-color: #e0e0e0; font-weight: 600; }
+
     @keyframes slideInLeft {
       from { transform: translateX(-30px); opacity: 0; }
       to   { transform: translateX(0);     opacity: 1; }
@@ -312,6 +366,7 @@
     </form>
   </div>
 
+  <script src="{{ url_for('static', filename='js/marked.min.js') }}"></script>
   <script>
     const chatBox = document.getElementById('chat');
     const form    = document.getElementById('chat-form');
@@ -477,8 +532,15 @@
       m.className = 'message ' + sender;
       const t = document.createElement('div');
       t.className = 'text';
-      if (sender === 'bot') t.innerHTML = text;
-      else t.textContent = text;
+      if (sender === 'bot') {
+        if (typeof marked !== 'undefined') {
+          t.innerHTML = marked.parse(text || '');
+        } else {
+          t.innerHTML = text;
+        }
+      } else {
+        t.textContent = text;
+      }
       m.appendChild(t);
       chatBox.appendChild(m);
       chatBox.scrollTop = chatBox.scrollHeight;
@@ -504,7 +566,11 @@
 
     function replaceSpinnerMessage(msgElem, text) {
       const t = msgElem.querySelector('.text');
-      t.innerHTML = text;
+      if (typeof marked !== 'undefined') {
+        t.innerHTML = marked.parse(text || '');
+      } else {
+        t.innerHTML = text;
+      }
     }
   </script>
 </body>
