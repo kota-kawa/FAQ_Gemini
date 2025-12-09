@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import logging
 from datetime import datetime
@@ -57,6 +58,11 @@ embeddings = HuggingFaceEmbeddings(
 def _current_datetime_line() -> str:
     """Return the timestamp string embedded in prompts."""
     return datetime.now().strftime("現在の日時ー%Y年%m月%d日%H時%M分")
+
+
+def _clean_think_tags(text: str) -> str:
+    """Remove <think>...</think> blocks from Qwen model responses."""
+    return re.sub(r'<think>.*?</think>\s*', '', text, flags=re.DOTALL).strip()
 
 
 def load_all_indices():
@@ -216,6 +222,7 @@ def get_answer(question: str, persist_history: bool = True):
         answer = raw_answer
     else:
         answer = getattr(raw_answer, "content", None) or getattr(raw_answer, "text", None) or str(raw_answer)
+    answer = _clean_think_tags(answer)
 
     ref_dict = {s: set() for s in top_srcs[:3] if s and s != "不明ファイル"}
     for doc in retrieved_docs:
@@ -276,12 +283,13 @@ def summarize_conversation(history: List[dict]) -> str:
 
     summary_response = llm.invoke(prompt_text)
     if isinstance(summary_response, str):
-        return summary_response.strip()
-    return (
+        return _clean_think_tags(summary_response)
+    result = (
         getattr(summary_response, "content", None)
         or getattr(summary_response, "text", None)
         or str(summary_response)
-    ).strip()
+    )
+    return _clean_think_tags(result)
 
 
 def get_conversation_summary() -> str:
@@ -399,6 +407,9 @@ def analyze_external_conversation(conversation_history: List[dict]) -> dict:
             response_text = response
         else:
             response_text = getattr(response, "content", None) or getattr(response, "text", None) or str(response)
+        
+        # Remove <think>...</think> blocks from Qwen responses
+        response_text = _clean_think_tags(response_text)
         
         # JSONの抽出（```json ``` で囲まれている可能性がある）
         response_text = response_text.strip()

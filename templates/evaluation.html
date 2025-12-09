@@ -1,0 +1,998 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Evaluation - Life Style Agent</title>
+  <link
+    rel="icon"
+    type="image/png"
+    href="{{ url_for('static', filename='favicon/home-assistant-favicon.png') }}"
+    sizes="512x512"
+  />
+  <!-- Bootstrap 5 CSS -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <!-- FontAwesome -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  
+  <style>
+    :root {
+      --primary: #4f46e5;
+      --primary-light: #6366f1;
+      --primary-dark: #4338ca;
+      --success: #10b981;
+      --danger: #ef4444;
+      --warning: #f59e0b;
+      --bg: #f1f5f9;
+      --card-bg: #ffffff;
+      --text-primary: #1e293b;
+      --text-secondary: #64748b;
+      --border-color: #e2e8f0;
+      --radius-sm: 8px;
+      --radius-md: 12px;
+      --radius-lg: 16px;
+      --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
+      --shadow-md: 0 4px 6px -1px rgba(0,0,0,0.1), 0 2px 4px -2px rgba(0,0,0,0.1);
+      --shadow-lg: 0 10px 15px -3px rgba(0,0,0,0.1), 0 4px 6px -4px rgba(0,0,0,0.1);
+      --transition: 0.2s ease;
+    }
+    
+    * { box-sizing: border-box; }
+    
+    body { 
+      background: linear-gradient(135deg, var(--bg) 0%, #e2e8f0 100%);
+      min-height: 100vh;
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Noto Sans JP', sans-serif;
+      color: var(--text-primary);
+    }
+    
+    /* Navbar */
+    .navbar {
+      background: linear-gradient(135deg, var(--primary) 0%, var(--primary-light) 100%) !important;
+      box-shadow: var(--shadow-lg);
+      padding: 1rem 0;
+    }
+    .navbar-brand {
+      font-weight: 700;
+      font-size: 1.25rem;
+      letter-spacing: -0.02em;
+    }
+    
+    /* Cards */
+    .card { 
+      border: none; 
+      box-shadow: var(--shadow-md); 
+      border-radius: var(--radius-lg);
+      background: var(--card-bg);
+      transition: box-shadow var(--transition);
+    }
+    .card:hover {
+      box-shadow: var(--shadow-lg);
+    }
+    
+    /* Model Selector */
+    .model-selector-wrapper {
+      background: rgba(255,255,255,0.15);
+      border-radius: var(--radius-sm);
+      padding: 4px;
+      backdrop-filter: blur(10px);
+    }
+    .model-selector-wrapper .form-select {
+      background-color: rgba(255,255,255,0.95);
+      border: none;
+      font-size: 0.875rem;
+      font-weight: 500;
+      padding: 0.5rem 2rem 0.5rem 0.75rem;
+      border-radius: var(--radius-sm);
+      color: var(--text-primary);
+      cursor: pointer;
+      transition: all var(--transition);
+    }
+    .model-selector-wrapper .form-select:focus {
+      box-shadow: 0 0 0 3px rgba(255,255,255,0.3);
+    }
+    
+    /* Control Buttons */
+    .btn {
+      font-weight: 600;
+      border-radius: var(--radius-sm);
+      padding: 0.625rem 1.25rem;
+      transition: all var(--transition);
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .btn-primary {
+      background: linear-gradient(135deg, var(--primary) 0%, var(--primary-light) 100%);
+      border: none;
+      box-shadow: 0 2px 4px rgba(79, 70, 229, 0.3);
+    }
+    .btn-primary:hover {
+      background: linear-gradient(135deg, var(--primary-dark) 0%, var(--primary) 100%);
+      transform: translateY(-1px);
+      box-shadow: 0 4px 8px rgba(79, 70, 229, 0.4);
+    }
+    .btn-success {
+      background: linear-gradient(135deg, var(--success) 0%, #059669 100%);
+      border: none;
+      box-shadow: 0 2px 4px rgba(16, 185, 129, 0.3);
+    }
+    .btn-success:hover {
+      background: linear-gradient(135deg, #059669 0%, #047857 100%);
+      transform: translateY(-1px);
+      box-shadow: 0 4px 8px rgba(16, 185, 129, 0.4);
+    }
+    .btn-outline-primary {
+      border: 2px solid var(--primary);
+      color: var(--primary);
+      background: transparent;
+    }
+    .btn-outline-primary:hover {
+      background: var(--primary);
+      color: white;
+      transform: translateY(-1px);
+    }
+    .btn-outline-danger {
+      border: 2px solid var(--danger);
+      color: var(--danger);
+      background: transparent;
+    }
+    .btn-outline-danger:hover {
+      background: var(--danger);
+      color: white;
+      transform: translateY(-1px);
+    }
+    .btn-light {
+      background: rgba(255,255,255,0.95);
+      color: var(--primary);
+      border: none;
+      font-weight: 600;
+    }
+    .btn-light:hover {
+      background: white;
+      color: var(--primary-dark);
+      transform: translateY(-1px);
+    }
+    
+    /* Stats Card */
+    .stats-card {
+      background: linear-gradient(135deg, #fafafa 0%, #f5f5f5 100%);
+      border-radius: var(--radius-md);
+      padding: 1rem 1.5rem;
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+    }
+    .stats-icon {
+      width: 48px;
+      height: 48px;
+      border-radius: var(--radius-sm);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.25rem;
+    }
+    .stats-icon.total { background: linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%); color: #2563eb; }
+    .stats-icon.success { background: linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%); color: #059669; }
+    .stats-icon.failure { background: linear-gradient(135deg, #fee2e2 0%, #fecaca 100%); color: #dc2626; }
+    .stats-icon.pending { background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%); color: #d97706; }
+    .stats-value { font-size: 1.5rem; font-weight: 700; color: var(--text-primary); }
+    .stats-label { font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.05em; }
+    
+    /* Table */
+    .table-container {
+      overflow-x: auto;
+      border-radius: var(--radius-lg);
+    }
+    .eval-table {
+      margin-bottom: 0;
+      font-size: 0.9rem;
+    }
+    .eval-table thead th {
+      background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+      font-weight: 700;
+      color: var(--text-primary);
+      padding: 1rem;
+      border-bottom: 2px solid var(--border-color);
+      white-space: nowrap;
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .eval-table tbody td {
+      padding: 1rem;
+      vertical-align: top;
+      border-bottom: 1px solid var(--border-color);
+    }
+    .eval-table tbody tr {
+      transition: background var(--transition);
+    }
+    .eval-table tbody tr:hover {
+      background: #f8fafc;
+    }
+    .eval-table tbody tr:last-child td {
+      border-bottom: none;
+    }
+    
+    /* Question Cell */
+    .question-cell {
+      font-weight: 600;
+      color: var(--text-primary);
+      line-height: 1.5;
+    }
+    .question-category {
+      display: inline-block;
+      background: linear-gradient(135deg, var(--primary) 0%, var(--primary-light) 100%);
+      color: white;
+      font-size: 0.7rem;
+      font-weight: 600;
+      padding: 0.25rem 0.5rem;
+      border-radius: 9999px;
+      margin-bottom: 0.5rem;
+    }
+    
+    /* Answer Cells */
+    .expected-answer {
+      background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%);
+      border-radius: var(--radius-sm);
+      padding: 0.75rem;
+      font-size: 0.85rem;
+      color: #166534;
+      line-height: 1.6;
+      white-space: pre-wrap;
+      border-left: 3px solid var(--success);
+    }
+    .actual-answer {
+      background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+      border-radius: var(--radius-sm);
+      padding: 0.75rem;
+      font-size: 0.85rem;
+      max-height: 200px;
+      overflow-y: auto;
+      border: 1px solid var(--border-color);
+      line-height: 1.6;
+    }
+    .actual-answer::-webkit-scrollbar { width: 4px; }
+    .actual-answer::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 2px; }
+    .model-badge {
+      display: inline-block;
+      background: linear-gradient(135deg, #1e293b 0%, #334155 100%);
+      color: white;
+      font-size: 0.7rem;
+      font-weight: 500;
+      padding: 0.25rem 0.5rem;
+      border-radius: 9999px;
+      margin-top: 0.5rem;
+    }
+    .not-executed {
+      color: var(--text-secondary);
+      font-style: italic;
+      padding: 1rem;
+      text-align: center;
+      background: #fafafa;
+      border-radius: var(--radius-sm);
+    }
+    
+    /* Status Badge */
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.375rem;
+      font-size: 0.8rem;
+      font-weight: 600;
+      padding: 0.5rem 1rem;
+      border-radius: 9999px;
+      white-space: nowrap;
+    }
+    .status-badge.pending { background: #fef3c7; color: #92400e; }
+    .status-badge.success { background: #d1fae5; color: #065f46; }
+    .status-badge.failure { background: #fee2e2; color: #991b1b; }
+    
+    /* Judge Buttons */
+    .judge-btn-group {
+      display: flex;
+      gap: 0.5rem;
+      margin-top: 0.75rem;
+    }
+    .judge-btn {
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      border: 2px solid;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: all var(--transition);
+      font-size: 0.9rem;
+    }
+    .judge-btn.ok {
+      border-color: var(--success);
+      color: var(--success);
+      background: transparent;
+    }
+    .judge-btn.ok:hover {
+      background: var(--success);
+      color: white;
+      transform: scale(1.1);
+    }
+    .judge-btn.ng {
+      border-color: var(--danger);
+      color: var(--danger);
+      background: transparent;
+    }
+    .judge-btn.ng:hover {
+      background: var(--danger);
+      color: white;
+      transform: scale(1.1);
+    }
+    
+    /* Run Button */
+    .run-btn {
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, var(--primary) 0%, var(--primary-light) 100%);
+      border: none;
+      color: white;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: all var(--transition);
+      box-shadow: 0 2px 4px rgba(79, 70, 229, 0.3);
+    }
+    .run-btn:hover {
+      transform: scale(1.1);
+      box-shadow: 0 4px 8px rgba(79, 70, 229, 0.4);
+    }
+    .run-btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      transform: none;
+    }
+    
+    /* Loading overlay */
+    .loading-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(255,255,255,0.85);
+      backdrop-filter: blur(4px);
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      z-index: 9999;
+      visibility: hidden;
+      opacity: 0;
+      transition: all 0.3s ease;
+    }
+    .loading-overlay.show { 
+      visibility: visible; 
+      opacity: 1; 
+    }
+    .loading-spinner {
+      width: 48px;
+      height: 48px;
+      border: 4px solid #e2e8f0;
+      border-top-color: var(--primary);
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+    .loading-text {
+      margin-top: 1rem;
+      font-weight: 600;
+      color: var(--text-secondary);
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    
+    /* Progress indicator for run all */
+    .progress-indicator {
+      display: none;
+      align-items: center;
+      gap: 1rem;
+      padding: 0.75rem 1rem;
+      background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%);
+      border-radius: var(--radius-sm);
+      color: var(--primary);
+      font-weight: 600;
+    }
+    .progress-indicator.show { display: flex; }
+    .progress-bar-wrapper {
+      flex: 1;
+      height: 8px;
+      background: #bfdbfe;
+      border-radius: 4px;
+      overflow: hidden;
+    }
+    .progress-bar-fill {
+      height: 100%;
+      background: linear-gradient(90deg, var(--primary) 0%, var(--primary-light) 100%);
+      border-radius: 4px;
+      transition: width 0.3s ease;
+    }
+    
+    /* Alert */
+    .alert {
+      border: none;
+      border-radius: var(--radius-md);
+      font-weight: 500;
+      box-shadow: var(--shadow-sm);
+    }
+    .alert-success { background: #d1fae5; color: #065f46; }
+    .alert-danger { background: #fee2e2; color: #991b1b; }
+    .alert-warning { background: #fef3c7; color: #92400e; }
+    .alert-info { background: #dbeafe; color: #1e40af; }
+    
+    /* Empty State */
+    .empty-state {
+      text-align: center;
+      padding: 4rem 2rem;
+      color: var(--text-secondary);
+    }
+    .empty-state-icon {
+      width: 80px;
+      height: 80px;
+      background: linear-gradient(135deg, #f1f5f9 0%, #e2e8f0 100%);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 1.5rem;
+      font-size: 2rem;
+      color: var(--text-secondary);
+    }
+    .empty-state-title {
+      font-size: 1.25rem;
+      font-weight: 700;
+      color: var(--text-primary);
+      margin-bottom: 0.5rem;
+    }
+    .empty-state-desc {
+      font-size: 0.9rem;
+      max-width: 300px;
+      margin: 0 auto;
+    }
+
+    /* Responsive */
+    @media (max-width: 768px) {
+      .navbar .container {
+        flex-wrap: wrap;
+        gap: 0.75rem;
+      }
+      .stats-grid {
+        grid-template-columns: repeat(2, 1fr) !important;
+      }
+      .control-buttons {
+        flex-direction: column;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Loading Overlay -->
+  <div id="loading-overlay" class="loading-overlay">
+    <div class="loading-spinner"></div>
+    <div class="loading-text" id="loading-text">処理中...</div>
+  </div>
+
+  <!-- Navbar -->
+  <nav class="navbar navbar-expand-lg navbar-dark mb-4">
+    <div class="container">
+      <a class="navbar-brand" href="#">
+        <i class="fa-solid fa-clipboard-check me-2"></i>RAG Evaluation
+      </a>
+      <div class="ms-auto d-flex align-items-center gap-3">
+        <div class="model-selector-wrapper">
+          <select id="model-selector" class="form-select">
+            <optgroup label="OpenAI">
+              <option value='{"provider": "openai", "model": "gpt-5.1"}'>GPT-5.1</option>
+            </optgroup>
+            <optgroup label="Gemini (Google)">
+              <option value='{"provider": "gemini", "model": "gemini-2.5-flash-lite"}'>Gemini 2.5 Flash-Lite</option>
+              <option value='{"provider": "gemini", "model": "gemini-3-pro-preview"}'>Gemini 3 Pro Preview</option>
+            </optgroup>
+            <optgroup label="Claude (Anthropic)">
+              <option value='{"provider": "claude", "model": "claude-haiku-4-5"}'>Claude Haiku 4.5</option>
+              <option value='{"provider": "claude", "model": "claude-opus-4-5"}'>Claude Opus 4.5</option>
+            </optgroup>
+            <optgroup label="Groq">
+              <option value='{"provider": "groq", "model": "llama-3.3-70b-versatile"}'>Llama 3.3 70B (Groq)</option>
+              <option value='{"provider": "groq", "model": "llama-3.1-8b-instant"}'>Llama 3.1 8B (Groq)</option>
+              <option value='{"provider": "groq", "model": "openai/gpt-oss-20b"}'>GPT-OSS 20B (Groq)</option>
+              <option value='{"provider": "groq", "model": "qwen/qwen3-32b"}'>Qwen3 32B (Groq)</option>
+            </optgroup>
+          </select>
+        </div>
+        <a href="/" class="btn btn-light btn-sm">
+          <i class="fa-solid fa-house me-1"></i> Top
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="container mb-5">
+    
+    <!-- Stats Cards -->
+    <div class="stats-grid mb-4" style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem;">
+      <div class="stats-card">
+        <div class="stats-icon total"><i class="fa-solid fa-list-check"></i></div>
+        <div>
+          <div class="stats-value" id="stats-total">0</div>
+          <div class="stats-label">総タスク</div>
+        </div>
+      </div>
+      <div class="stats-card">
+        <div class="stats-icon success"><i class="fa-solid fa-check"></i></div>
+        <div>
+          <div class="stats-value" id="stats-success">0</div>
+          <div class="stats-label">成功</div>
+        </div>
+      </div>
+      <div class="stats-card">
+        <div class="stats-icon failure"><i class="fa-solid fa-xmark"></i></div>
+        <div>
+          <div class="stats-value" id="stats-failure">0</div>
+          <div class="stats-label">失敗</div>
+        </div>
+      </div>
+      <div class="stats-card">
+        <div class="stats-icon pending"><i class="fa-solid fa-clock"></i></div>
+        <div>
+          <div class="stats-value" id="stats-pending">0</div>
+          <div class="stats-label">未判定</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Controls Card -->
+    <div class="card mb-4">
+      <div class="card-body d-flex flex-wrap gap-3 align-items-center justify-content-between control-buttons">
+        <div class="d-flex gap-2 flex-wrap">
+          <button class="btn btn-outline-primary" id="add-samples-btn">
+            <i class="fa-solid fa-plus"></i> サンプル追加
+          </button>
+          <button class="btn btn-outline-danger" id="clear-data-btn">
+            <i class="fa-solid fa-trash"></i> 全削除
+          </button>
+        </div>
+        <div class="d-flex align-items-center gap-3">
+          <div class="progress-indicator" id="progress-indicator">
+            <span id="progress-text">0 / 0</span>
+            <div class="progress-bar-wrapper">
+              <div class="progress-bar-fill" id="progress-bar" style="width: 0%"></div>
+            </div>
+          </div>
+          <button class="btn btn-success" id="run-all-btn">
+            <i class="fa-solid fa-play"></i> まとめて実行
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Alert Placeholder -->
+    <div id="alert-container"></div>
+
+    <!-- Data Table -->
+    <div class="card">
+      <div class="card-body p-0 table-container">
+        <table class="table eval-table" id="eval-table">
+          <thead>
+            <tr>
+              <th style="width: 25%;">質問</th>
+              <th style="width: 22%;">期待される回答</th>
+              <th style="width: 28%;">実際の回答</th>
+              <th style="width: 13%; text-align: center;">判定</th>
+              <th style="width: 12%; text-align: center;">操作</th>
+            </tr>
+          </thead>
+          <tbody id="table-body">
+            <!-- Tasks rendered here -->
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Scripts -->
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+  <script src="{{ url_for('static', filename='js/marked.min.js') }}"></script>
+  
+  <script>
+    // DOM Elements
+    const tableBody = document.getElementById('table-body');
+    const modelSelector = document.getElementById('model-selector');
+    const loadingOverlay = document.getElementById('loading-overlay');
+    const loadingText = document.getElementById('loading-text');
+    const alertContainer = document.getElementById('alert-container');
+    const progressIndicator = document.getElementById('progress-indicator');
+    const progressBar = document.getElementById('progress-bar');
+    const progressText = document.getElementById('progress-text');
+
+    // Stats elements
+    const statsTotal = document.getElementById('stats-total');
+    const statsSuccess = document.getElementById('stats-success');
+    const statsFailure = document.getElementById('stats-failure');
+    const statsPending = document.getElementById('stats-pending');
+
+    // State
+    let isRunningAll = false;
+
+    // --- UI Helpers ---
+    function showLoading(show, text = '処理中...') {
+      loadingText.textContent = text;
+      if (show) loadingOverlay.classList.add('show');
+      else loadingOverlay.classList.remove('show');
+    }
+
+    function showAlert(message, type = 'success') {
+      const id = 'alert-' + Date.now();
+      const wrapper = document.createElement('div');
+      wrapper.id = id;
+      wrapper.innerHTML = `
+        <div class="alert alert-${type} alert-dismissible fade show" role="alert">
+          <i class="fa-solid ${type === 'success' ? 'fa-check-circle' : type === 'danger' ? 'fa-exclamation-circle' : 'fa-info-circle'} me-2"></i>
+          ${message}
+          <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+        </div>`;
+      alertContainer.prepend(wrapper);
+      setTimeout(() => {
+        const el = document.getElementById(id);
+        if (el) el.remove();
+      }, 4000);
+    }
+
+    function updateStats(data) {
+      const tasks = data.tasks || [];
+      const results = data.results || [];
+      
+      // Count latest result for each task
+      const latestResults = {};
+      results.forEach(r => {
+        if (!latestResults[r.task_id] || new Date(r.timestamp) > new Date(latestResults[r.task_id].timestamp)) {
+          latestResults[r.task_id] = r;
+        }
+      });
+      
+      let successCount = 0, failureCount = 0, pendingCount = 0;
+      Object.values(latestResults).forEach(r => {
+        if (r.status === 'success') successCount++;
+        else if (r.status === 'failure') failureCount++;
+        else pendingCount++;
+      });
+      
+      const executedCount = Object.keys(latestResults).length;
+      const notExecuted = tasks.length - executedCount;
+      
+      statsTotal.textContent = tasks.length;
+      statsSuccess.textContent = successCount;
+      statsFailure.textContent = failureCount;
+      statsPending.textContent = pendingCount + notExecuted;
+    }
+
+    function showProgress(show, current = 0, total = 0) {
+      if (show) {
+        progressIndicator.classList.add('show');
+        progressText.textContent = `${current} / ${total}`;
+        progressBar.style.width = total > 0 ? `${(current / total) * 100}%` : '0%';
+      } else {
+        progressIndicator.classList.remove('show');
+      }
+    }
+
+    // Extract category from question
+    function extractCategory(question) {
+      const match = question.match(/^\[([^\]]+)\]/);
+      return match ? match[1] : null;
+    }
+    
+    function removeCategory(question) {
+      return question.replace(/^\[[^\]]+\]\s*/, '');
+    }
+
+    // --- Model Selection ---
+    const DEFAULT_MODEL_SELECTION = { provider: 'openai', model: 'gpt-5.1' };
+    
+    async function hydrateModelSelector() {
+      try {
+        const res = await fetch('/model_settings', { cache: 'no-store' });
+        if (!res.ok) throw new Error('failed');
+        const data = await res.json();
+        const selection = (data && data.selection) ? data.selection : DEFAULT_MODEL_SELECTION;
+        
+        Array.from(modelSelector.options).forEach(opt => {
+          try {
+            const val = JSON.parse(opt.value);
+            if (val.provider === selection.provider && val.model === selection.model) {
+              opt.selected = true;
+            }
+          } catch(e){}
+        });
+      } catch (err) { console.error(err); }
+    }
+    
+    modelSelector.addEventListener('change', async (e) => {
+      try {
+        showLoading(true, 'モデルを変更中...');
+        await fetch('/model_settings', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: e.target.value
+        });
+        showAlert('モデルを変更しました', 'info');
+      } catch(err){ 
+        showAlert('モデル変更に失敗しました', 'danger');
+      } finally {
+        showLoading(false);
+      }
+    });
+
+    // --- Data Management ---
+    async function loadTasks() {
+      try {
+        const res = await fetch('/api/evaluation/data');
+        if (!res.ok) throw new Error('API Error');
+        const data = await res.json();
+        updateStats(data);
+        renderTable(data);
+      } catch(e) {
+        console.error("Load failed", e);
+        tableBody.innerHTML = `
+          <tr>
+            <td colspan="5">
+              <div class="empty-state">
+                <div class="empty-state-icon"><i class="fa-solid fa-exclamation-triangle"></i></div>
+                <div class="empty-state-title">読み込みエラー</div>
+                <div class="empty-state-desc">データの取得に失敗しました。再読み込みしてください。</div>
+              </div>
+            </td>
+          </tr>`;
+      }
+    }
+
+    function renderTable(data) {
+      tableBody.innerHTML = '';
+      const tasks = data.tasks || [];
+      const results = data.results || [];
+
+      if (tasks.length === 0) {
+        tableBody.innerHTML = `
+          <tr>
+            <td colspan="5">
+              <div class="empty-state">
+                <div class="empty-state-icon"><i class="fa-solid fa-folder-open"></i></div>
+                <div class="empty-state-title">データがありません</div>
+                <div class="empty-state-desc">上の「サンプル追加」ボタンを押してテストデータを追加してください。</div>
+              </div>
+            </td>
+          </tr>`;
+        return;
+      }
+
+      tasks.forEach(task => {
+        const taskResults = results.filter(r => r.task_id === task.id).sort((a,b) => new Date(b.timestamp) - new Date(a.timestamp));
+        const latestResult = taskResults[0];
+
+        const tr = document.createElement('tr');
+        
+        // Question cell
+        const category = extractCategory(task.question);
+        const questionText = removeCategory(task.question);
+        const tdQuestion = document.createElement('td');
+        tdQuestion.innerHTML = `
+          <div class="question-cell">
+            ${category ? `<span class="question-category">${category}</span>` : ''}
+            <div>${questionText}</div>
+          </div>`;
+        tr.appendChild(tdQuestion);
+        
+        // Expected answer cell
+        const tdExpected = document.createElement('td');
+        tdExpected.innerHTML = `<div class="expected-answer">${task.expected_answer}</div>`;
+        tr.appendChild(tdExpected);
+        
+        // Actual answer cell
+        const tdActual = document.createElement('td');
+        if (latestResult) {
+          const parsedAnswer = typeof marked !== 'undefined' 
+            ? marked.parse(latestResult.actual_answer || '') 
+            : (latestResult.actual_answer || '');
+          tdActual.innerHTML = `
+            <div class="actual-answer">${parsedAnswer}</div>
+            ${latestResult.model ? `<span class="model-badge"><i class="fa-solid fa-robot me-1"></i>${latestResult.model}</span>` : ''}`;
+        } else {
+          tdActual.innerHTML = `<div class="not-executed"><i class="fa-solid fa-hourglass me-2"></i>未実行</div>`;
+        }
+        tr.appendChild(tdActual);
+        
+        // Status cell
+        const tdStatus = document.createElement('td');
+        tdStatus.className = 'text-center';
+        
+        if (latestResult) {
+          let badgeClass = 'pending';
+          let statusIcon = 'fa-clock';
+          let statusText = 'Pending';
+          
+          if (latestResult.status === 'success') { 
+            badgeClass = 'success'; 
+            statusIcon = 'fa-check';
+            statusText = 'OK'; 
+          }
+          if (latestResult.status === 'failure') { 
+            badgeClass = 'failure'; 
+            statusIcon = 'fa-xmark';
+            statusText = 'NG'; 
+          }
+          
+          tdStatus.innerHTML = `
+            <span class="status-badge ${badgeClass}">
+              <i class="fa-solid ${statusIcon}"></i> ${statusText}
+            </span>
+            <div class="judge-btn-group justify-content-center">
+              <button class="judge-btn ok" title="成功としてマーク" data-result-id="${latestResult.id}" data-status="success">
+                <i class="fa-solid fa-check"></i>
+              </button>
+              <button class="judge-btn ng" title="失敗としてマーク" data-result-id="${latestResult.id}" data-status="failure">
+                <i class="fa-solid fa-xmark"></i>
+              </button>
+            </div>`;
+        } else {
+          tdStatus.innerHTML = `<span class="text-muted">-</span>`;
+        }
+        tr.appendChild(tdStatus);
+
+        // Action cell
+        const tdAction = document.createElement('td');
+        tdAction.className = 'text-center';
+        tdAction.innerHTML = `
+          <button class="run-btn" title="このタスクを実行" data-task-id="${task.id}" ${isRunningAll ? 'disabled' : ''}>
+            <i class="fa-solid fa-play"></i>
+          </button>`;
+        tr.appendChild(tdAction);
+
+        tableBody.appendChild(tr);
+      });
+
+      // Attach event listeners
+      tableBody.querySelectorAll('.judge-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          updateStatus(btn.dataset.resultId, btn.dataset.status);
+        });
+      });
+      
+      tableBody.querySelectorAll('.run-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          if (!isRunningAll) runTask(btn.dataset.taskId);
+        });
+      });
+    }
+
+    async function updateStatus(resultId, status) {
+      try {
+        await fetch('/api/evaluation/status', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ result_id: resultId, status: status })
+        });
+        await loadTasks();
+      } catch(e) {
+        showAlert('ステータス更新に失敗しました', 'danger');
+      }
+    }
+
+    async function runTask(taskId) {
+      try {
+        showLoading(true, 'RAGを実行中...');
+        const res = await fetch('/api/evaluation/run', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ task_id: taskId })
+        });
+        if(!res.ok) throw new Error('API Error');
+        await loadTasks();
+        showAlert('タスクを実行しました', 'success');
+      } catch (e) {
+        showAlert('実行エラーが発生しました', 'danger');
+      } finally {
+        showLoading(false);
+      }
+    }
+
+    // --- Event Listeners ---
+    document.getElementById('add-samples-btn').addEventListener('click', async () => {
+      if(!confirm('サンプルデータを追加しますか？')) return;
+      try {
+        showLoading(true, 'サンプルを追加中...');
+        await fetch('/api/evaluation/tasks', { 
+          method: 'POST', 
+          headers: {'Content-Type': 'application/json'}, 
+          body: JSON.stringify({ action: 'add_samples' }) 
+        });
+        await loadTasks();
+        showAlert('サンプルデータを追加しました', 'success');
+      } catch(e) {
+        showAlert('追加に失敗しました', 'danger');
+      } finally {
+        showLoading(false);
+      }
+    });
+
+    document.getElementById('clear-data-btn').addEventListener('click', async () => {
+      if(!confirm('すべてのデータを削除しますか？この操作は取り消せません。')) return;
+      try {
+        showLoading(true, 'データを削除中...');
+        await fetch('/api/evaluation/tasks', { method: 'DELETE' });
+        await loadTasks();
+        showAlert('データを削除しました', 'warning');
+      } catch(e) {
+        showAlert('削除に失敗しました', 'danger');
+      } finally {
+        showLoading(false);
+      }
+    });
+
+    document.getElementById('run-all-btn').addEventListener('click', async () => {
+      if(!confirm('すべてのタスクを実行しますか？これには時間がかかる場合があります。')) return;
+      
+      isRunningAll = true;
+      const runAllBtn = document.getElementById('run-all-btn');
+      runAllBtn.disabled = true;
+      
+      try {
+        const res = await fetch('/api/evaluation/data');
+        const data = await res.json();
+        const tasks = data.tasks || [];
+        
+        if (tasks.length === 0) {
+          showAlert('実行するタスクがありません', 'warning');
+          return;
+        }
+        
+        showProgress(true, 0, tasks.length);
+        
+        let completed = 0;
+        let errors = 0;
+        
+        for (const task of tasks) {
+          try {
+            await fetch('/api/evaluation/run', {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({ task_id: task.id })
+            });
+          } catch(e) {
+            errors++;
+          }
+          completed++;
+          showProgress(true, completed, tasks.length);
+        }
+        
+        await loadTasks();
+        
+        if (errors > 0) {
+          showAlert(`${completed - errors}件成功、${errors}件失敗`, 'warning');
+        } else {
+          showAlert(`${completed}件のタスクを実行しました`, 'success');
+        }
+      } catch(e) {
+        showAlert('一括実行中にエラーが発生しました', 'danger');
+      } finally {
+        isRunningAll = false;
+        runAllBtn.disabled = false;
+        showProgress(false);
+      }
+    });
+
+    // --- Init ---
+    hydrateModelSelector();
+    loadTasks();
+  </script>
+</body>
+</html>

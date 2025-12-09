@@ -18,6 +18,7 @@ import ai_engine_faiss as ai_engine
 from lifestyle_tools import analyze_conversation_payload, run_rag_answer
 from mcp_server import mcp_server
 from model_selection import current_selection, update_override
+import evaluation_manager
 
 # ── 環境変数 / Flask 初期化 ──
 load_secrets_env()
@@ -57,6 +58,78 @@ def _notify_platform(selection: dict) -> None:
     except requests.exceptions.RequestException as exc:
         app.logger.info("Platform model sync skipped (%s)", exc)
 
+
+# ── Evaluation Routes ──
+@app.route("/evaluation")
+def evaluation_page():
+    return render_template("evaluation.html")
+
+@app.route("/api/evaluation/data", methods=["GET"])
+def get_eval_data():
+    return jsonify({
+        "tasks": evaluation_manager.get_tasks(),
+        "results": evaluation_manager.get_results()
+    })
+
+@app.route("/api/evaluation/tasks", methods=["POST", "DELETE"])
+def manage_eval_tasks():
+    if request.method == "DELETE":
+        evaluation_manager.clear_data()
+        return jsonify({"status": "cleared"})
+    
+    data = request.get_json() or {}
+    action = data.get("action")
+    if action == "add_samples":
+        evaluation_manager.add_tasks(evaluation_manager.SAMPLE_TASKS)
+        return jsonify({"status": "added"})
+    
+    return jsonify({"error": "Invalid action"}), 400
+
+@app.route("/api/evaluation/run", methods=["POST"])
+def run_eval_task():
+    data = request.get_json() or {}
+    task_id = data.get("task_id")
+    if not task_id:
+        return jsonify({"error": "task_id required"}), 400
+    
+    tasks = evaluation_manager.get_tasks()
+    task = next((t for t in tasks if t["id"] == task_id), None)
+    if not task:
+        return jsonify({"error": "Task not found"}), 404
+
+    # Run RAG
+    try:
+        # Get current model info
+        selection = current_selection("lifestyle")
+        model_name = selection.get("model", "unknown")
+        
+        # Execute RAG (no persistence)
+        rag_result = run_rag_answer(task["question"], persist_history=False)
+        actual_answer = rag_result.get("answer", "")
+        
+        # Record result
+        result = evaluation_manager.add_result(
+            task_id=task_id,
+            model=model_name,
+            question=task["question"],
+            expected_answer=task["expected_answer"],
+            actual_answer=actual_answer
+        )
+        return jsonify({"result": result})
+    except Exception as e:
+        app.logger.exception("Evaluation run failed")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/evaluation/status", methods=["POST"])
+def update_eval_status():
+    data = request.get_json() or {}
+    result_id = data.get("result_id")
+    status = data.get("status")
+    if not result_id or not status:
+        return jsonify({"error": "Missing result_id or status"}), 400
+    
+    evaluation_manager.update_result_status(result_id, status)
+    return jsonify({"status": "updated"})
 
 
 @app.route("/rag_answer", methods=["POST"])
